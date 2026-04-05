@@ -7,7 +7,7 @@
   "buildTag": "latest",
   "environmentVariables": {},
   "dockerfile": "../Dockerfile",
-  "dockerContextDir": "../..",
+  "dockerContextDir": "../../..",
   "readme": "./README.md",
   "input": "./input_schema.json",
   "storages": {
