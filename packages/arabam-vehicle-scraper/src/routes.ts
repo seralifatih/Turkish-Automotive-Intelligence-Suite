@@ -153,6 +153,9 @@ router.addHandler(LABEL.DETAIL, async ({ request, page }: PlaywrightCrawlingCont
   const input = request.userData.input as Input;
   const listingCard = request.userData.listingCard as {
     listingId?: string;
+    make?: string | null;
+    model?: string | null;
+    variant?: string | null;
     sellerType?: string;
     featured?: boolean;
     thumbnailUrl?: string;
@@ -185,6 +188,9 @@ router.addHandler(LABEL.DETAIL, async ({ request, page }: PlaywrightCrawlingCont
   }
 
   const now = new Date().toISOString();
+  const resolvedMake = detail.make ?? listingCard?.make ?? '';
+  const resolvedModel = detail.model ?? listingCard?.model ?? '';
+  const resolvedVariant = resolveVariant(detail.variant, listingCard?.variant, resolvedMake, resolvedModel);
 
   // Merge card data with detail data (card is faster, detail is authoritative)
   const record = {
@@ -192,9 +198,9 @@ router.addHandler(LABEL.DETAIL, async ({ request, page }: PlaywrightCrawlingCont
     title: detail.title ?? '',
     url: request.url,
 
-    make: detail.make ?? '',
-    model: detail.model ?? '',
-    variant: detail.variant ?? null,
+    make: resolvedMake,
+    model: resolvedModel,
+    variant: resolvedVariant,
     year: detail.year ?? null,
     bodyType: detail.bodyType ?? null,
 
@@ -369,6 +375,33 @@ function buildRecordFromCard(
     scrapedAt: now,
     sourceUrl,
   };
+}
+
+function resolveVariant(
+  detailVariant: string | null | undefined,
+  cardVariant: string | null | undefined,
+  make: string | null | undefined,
+  model: string | null | undefined,
+): string | null {
+  const trimmedDetail = detailVariant?.trim() || null;
+  const trimmedCard = cardVariant?.trim() || null;
+  if (!trimmedDetail) return trimmedCard;
+
+  const fullPrefix = make && model ? `${make} ${model} ` : null;
+  if (fullPrefix && trimmedDetail.toLowerCase().startsWith(fullPrefix.toLowerCase())) {
+    return trimmedCard ?? (trimmedDetail.slice(fullPrefix.length).trim() || null);
+  }
+
+  const modelPrefix = model ? `${model} ` : null;
+  if (modelPrefix && trimmedDetail.toLowerCase().startsWith(modelPrefix.toLowerCase())) {
+    return trimmedCard ?? (trimmedDetail.slice(modelPrefix.length).trim() || null);
+  }
+
+  if (model && trimmedDetail.toLowerCase() === model.toLowerCase()) {
+    return trimmedCard;
+  }
+
+  return trimmedDetail;
 }
 
 /**

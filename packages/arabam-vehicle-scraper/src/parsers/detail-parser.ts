@@ -92,6 +92,111 @@ function extractGtmTargeting(html: string): Record<string, string> {
   return targeting;
 }
 
+interface CollectDataIdentity {
+  brand: string | null;
+  model: string | null;
+  serial: string | null;
+}
+
+function extractCollectDataIdentity(html: string): CollectDataIdentity {
+  const marker = 'var collectDataObject = ';
+  const markerIndex = html.indexOf(marker);
+  if (markerIndex === -1) {
+    return { brand: null, model: null, serial: null };
+  }
+
+  try {
+    let start = markerIndex + marker.length;
+    while (start < html.length && /\s/.test(html[start])) start++;
+    if (html[start] !== '{') {
+      return { brand: null, model: null, serial: null };
+    }
+
+    let depth = 0;
+    let quoteChar: '"' | "'" | null = null;
+    let escaped = false;
+    let end = start;
+
+    for (; end < html.length; end++) {
+      const ch = html[end];
+
+      if (quoteChar) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch === '\\') {
+          escaped = true;
+          continue;
+        }
+        if (ch === quoteChar) {
+          quoteChar = null;
+        }
+        continue;
+      }
+
+      if (ch === '"' || ch === '\'') {
+        quoteChar = ch;
+        continue;
+      }
+
+      if (ch === '{') {
+        depth++;
+        continue;
+      }
+
+      if (ch === '}') {
+        depth--;
+        if (depth === 0) break;
+      }
+    }
+
+    const objectLiteral = html.slice(start, end + 1);
+    const parsed = JSON.parse(objectLiteral) as {
+      Brand?: string;
+      Model?: string;
+      Serial?: string;
+    };
+
+    return {
+      brand: parsed.Brand ?? null,
+      model: parsed.Model ?? null,
+      serial: parsed.Serial ?? null,
+    };
+  } catch (err) {
+    log.debug(`extractCollectDataIdentity parse error: ${err}`);
+    return { brand: null, model: null, serial: null };
+  }
+}
+
+function deriveVariant(
+  candidates: Array<string | null | undefined>,
+  make: string | null,
+  model: string | null,
+): string | null {
+  for (const candidate of candidates) {
+    let value = candidate?.trim();
+    if (!value) continue;
+    if (make && model) {
+      const fullPrefix = `${make} ${model} `;
+      if (value.toLowerCase().startsWith(fullPrefix.toLowerCase())) {
+        value = value.slice(fullPrefix.length).trim();
+      }
+    }
+    if (model) {
+      const modelPrefix = `${model} `;
+      if (value.toLowerCase().startsWith(modelPrefix.toLowerCase())) {
+        value = value.slice(modelPrefix.length).trim();
+      }
+    }
+    if (model && value.toLowerCase() === model.toLowerCase()) continue;
+    if (make && value.toLowerCase() === make.toLowerCase()) continue;
+    return value;
+  }
+
+  return null;
+}
+
 // ─── Specs table extraction ───────────────────────────────────────────────────
 
 /**
@@ -373,6 +478,7 @@ async function extractDamageReport(page: Page): Promise<string | null> {
 export async function parseDetailPage(page: Page): Promise<DetailData> {
   const html = await page.content();
   const gtm = extractGtmTargeting(html);
+  const collectIdentity = extractCollectDataIdentity(html);
 
   // Run parallel extractions
   const [specs, images, seller, location, misc, damageReport] = await Promise.all([
@@ -386,10 +492,32 @@ export async function parseDetailPage(page: Page): Promise<DetailData> {
 
   // ── Resolve fields with fallback chain: specs table → GTM → URL slug ──────
 
-  // Make/model/year — GTM is very reliable for these
-  const make = specs['Marka'] ?? specs['Araç Markası'] ?? gtm['marka'] ?? null;
-  const model = specs['Model'] ?? specs['Araç Modeli'] ?? gtm['model'] ?? null;
-  const variant = specs['Versiyon'] ?? specs['Paket'] ?? specs['Seri'] ?? null;
+  // Make/model/year — GTM and collectData are more reliable than the specs table here.
+  const make =
+    gtm['brand'] ??
+    collectIdentity.brand ??
+    specs['Marka'] ??
+    specs['Araç Markası'] ??
+    gtm['marka'] ??
+    null;
+  const model =
+    gtm['model'] ??
+    collectIdentity.serial ??
+    specs['Seri'] ??
+    specs['Araç Modeli'] ??
+    specs['Model'] ??
+    null;
+  const variant = deriveVariant(
+    [
+      specs['Versiyon'],
+      specs['Paket'],
+      collectIdentity.model,
+      gtm['modelGroup'],
+      specs['Model'],
+    ],
+    make,
+    model,
+  );
 
   const yearRaw = specs['Yıl'] ?? specs['Model Yılı'] ?? gtm['year'] ?? null;
   const year = yearRaw ? parseModelYear(yearRaw) : null;
