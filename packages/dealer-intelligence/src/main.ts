@@ -21,7 +21,8 @@ import type { Input, Platform, RunSummary } from './types.js';
 import {
   buildDiscoveryUrl as arabamDiscoveryUrl,
   buildGaleriUrl,
-  extractGaleriSlugs,
+  extractDiscoveryListingUrls,
+  extractGaleriSlugsRobust,
   scrapeGaleriProfile,
 } from './platforms/arabam.js';
 import {
@@ -123,19 +124,59 @@ try {
     // Arabam discovery
     if (input.platforms.includes('arabam')) {
       const discoveredSlugs = new Set<string>();
+      const inspectedListingUrls = new Set<string>();
       let skip = 0;
 
       const discoveryRunner = new PlaywrightCrawler({
         headless: true,
-        launchContext: { launcher: chromium as never },
+        launchContext: {
+          launcher: chromium as never,
+          launchOptions: {
+            args: ['--no-sandbox', '--disable-blink-features=AutomationControlled', '--lang=tr-TR,tr'],
+          },
+        },
         proxyConfiguration,
-        maxConcurrency: 2,
+        maxConcurrency: 1,
         maxRequestRetries: 2,
+        requestHandlerTimeoutSecs: 120,
+        navigationTimeoutSecs: 45,
+        preNavigationHooks: [
+          async ({ page }, gotoOptions) => {
+            const pageWithRouteFlag = page as typeof page & { __arabamDiscoveryRouteSetup?: boolean };
+
+            gotoOptions.waitUntil = 'domcontentloaded';
+            gotoOptions.timeout = 40_000;
+
+            await page.setExtraHTTPHeaders({ 'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8' });
+
+            if (!pageWithRouteFlag.__arabamDiscoveryRouteSetup) {
+              await page.route('**/*', async (route) => {
+                const resourceType = route.request().resourceType();
+                const resourceUrl = route.request().url();
+
+                if (['image', 'media', 'font'].includes(resourceType)) {
+                  await route.abort();
+                  return;
+                }
+
+                if (
+                  /google-analytics|googletagmanager|doubleclick|facebook|hotjar|creativecdn/i.test(resourceUrl)
+                ) {
+                  await route.abort();
+                  return;
+                }
+
+                await route.continue();
+              });
+              pageWithRouteFlag.__arabamDiscoveryRouteSetup = true;
+            }
+          },
+        ],
         async requestHandler({ page }) {
-          await page.waitForSelector('.listing-list-item, [class*="listing"]', { timeout: 20_000 })
+          await page.waitForSelector('.listing-list-item, [class*="listing"]', { timeout: 15_000 })
             .catch(() => {});
 
-          const slugs = await extractGaleriSlugs(page);
+          const slugs = await extractGaleriSlugsRobust(page);
           log.info(`[Arabam Discovery] Found ${slugs.length} galeri slugs`);
           for (const slug of slugs) {
             if (!discoveredSlugs.has(slug) && discoveredSlugs.size < input.maxDealers) {
@@ -143,6 +184,41 @@ try {
               dealerJobQueue.push({ url: buildGaleriUrl(slug), platform: 'arabam' });
             }
           }
+
+          if (discoveredSlugs.size < input.maxDealers) {
+            const remainingNeeded = input.maxDealers - discoveredSlugs.size;
+            const candidateUrls = await extractDiscoveryListingUrls(
+              page,
+              Math.max(remainingNeeded * 4, 12),
+            );
+            log.info(`[Arabam Discovery] Fallback inspecting ${candidateUrls.length} listing detail URLs`);
+
+            for (const listingUrl of candidateUrls) {
+              if (discoveredSlugs.size >= input.maxDealers) break;
+              if (inspectedListingUrls.has(listingUrl)) continue;
+
+              inspectedListingUrls.add(listingUrl);
+
+              try {
+                await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+                await page.waitForTimeout(250 + Math.floor(Math.random() * 450));
+
+                const detailSlugs = await extractGaleriSlugsRobust(page);
+                if (detailSlugs.length > 0) {
+                  log.info(`[Arabam Discovery] Detail fallback found ${detailSlugs.length} galeri slug(s)`);
+                }
+                for (const slug of detailSlugs) {
+                  if (!discoveredSlugs.has(slug) && discoveredSlugs.size < input.maxDealers) {
+                    discoveredSlugs.add(slug);
+                    dealerJobQueue.push({ url: buildGaleriUrl(slug), platform: 'arabam' });
+                  }
+                }
+              } catch (err) {
+                log.debug(`[Arabam Discovery] Detail fallback failed for ${listingUrl}: ${err}`);
+              }
+            }
+          }
+
           totalDiscovered = discoveredSlugs.size;
         },
         failedRequestHandler({ request }) {
@@ -155,8 +231,7 @@ try {
       while (discoveredSlugs.size < input.maxDealers && skip <= 20 * 20) {
         discoveryUrls.push(arabamDiscoveryUrl(input.searchByCity, input.searchByMake, skip));
         skip += 20;
-        // Run in batches of 3 pages
-        if (discoveryUrls.length >= 3) {
+        if (discoveryUrls.length >= 1) {
           await discoveryRunner.run(discoveryUrls.splice(0, 3).map((u) => ({ url: u })));
         }
       }

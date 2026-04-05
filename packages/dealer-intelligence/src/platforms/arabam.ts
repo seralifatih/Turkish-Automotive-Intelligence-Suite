@@ -67,6 +67,8 @@ export function buildDiscoveryUrl(
   searchByMake: string | undefined,
   skip = 0,
 ): string {
+  const take = 20;
+  const pageNumber = Math.floor(skip / take) + 1;
   let path = '/ikinci-el/otomobil';
 
   if (searchByMake && searchByCity) {
@@ -80,8 +82,10 @@ export function buildDiscoveryUrl(
   }
 
   const url = new URL(`https://www.arabam.com${path}`);
-  url.searchParams.set('take', '20');
-  url.searchParams.set('skip', String(skip));
+  url.searchParams.set('take', String(take));
+  if (pageNumber > 1) {
+    url.searchParams.set('page', String(pageNumber));
+  }
   return url.toString();
 }
 
@@ -90,6 +94,22 @@ export function buildDiscoveryUrl(
  */
 export function buildGaleriUrl(slug: string): string {
   return `https://www.arabam.com/galeri/${slug}`;
+}
+
+function extractGaleriSlugsFromHtml(html: string): string[] {
+  const slugs = new Set<string>();
+
+  for (const match of html.matchAll(/\/galeri\/([^"'?#\s<>]+)/g)) {
+    const slug = match[1]?.trim();
+    if (slug) slugs.add(slug);
+  }
+
+  for (const match of html.matchAll(/"FirmUrl":"([^"]+)"/g)) {
+    const slug = match[1]?.trim();
+    if (slug) slugs.add(slug);
+  }
+
+  return [...slugs];
 }
 
 // ─── Dealer slug extraction from discovery page ───────────────────────────────
@@ -133,6 +153,45 @@ export async function extractGaleriSlugs(page: Page): Promise<string[]> {
 
     return [...slugs];
   });
+}
+
+export async function extractGaleriSlugsRobust(page: Page): Promise<string[]> {
+  const domSlugs = await extractGaleriSlugs(page);
+  const html = await page.content().catch(() => '');
+  const mergedSlugs = new Set<string>(domSlugs);
+
+  for (const slug of extractGaleriSlugsFromHtml(html)) {
+    mergedSlugs.add(slug);
+  }
+
+  return [...mergedSlugs];
+}
+
+/**
+ * Extract listing detail URLs from a discovery/search page.
+ * Arabam's galeri listing grid no longer exposes profile links directly, but
+ * the detail pages still link to /galeri/{slug}. We use those detail pages as
+ * a fallback discovery source.
+ */
+export async function extractDiscoveryListingUrls(page: Page, limit = 20): Promise<string[]> {
+  return page.evaluate((maxItems) => {
+    const urls = new Set<string>();
+    const elements = Array.from(document.querySelectorAll('a[href*="/ilan/"]'));
+
+    for (const element of elements) {
+      const href = element.getAttribute('href') ?? '';
+      if (!href.includes('/ilan/')) continue;
+
+      const absoluteUrl = href.startsWith('http')
+        ? href
+        : `${window.location.origin}${href.startsWith('/') ? href : `/${href}`}`;
+
+      urls.add(absoluteUrl);
+      if (urls.size >= maxItems) break;
+    }
+
+    return [...urls];
+  }, limit);
 }
 
 // ─── Galeri profile extraction ────────────────────────────────────────────────
