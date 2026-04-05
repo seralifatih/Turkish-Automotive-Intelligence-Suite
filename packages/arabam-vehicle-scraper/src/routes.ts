@@ -101,6 +101,11 @@ router.addHandler(LABEL.SEARCH, async ({ request, page, enqueueLinks, crawler }:
       ]);
     }
     log.info(`[SEARCH] Enqueued ${Math.min(toEnqueue.length, remaining)} detail pages`);
+
+    if (toEnqueue.length >= remaining) {
+      log.info('[SEARCH] Current page already supplied enough detail URLs for maxListings, stopping pagination');
+      return;
+    }
   } else {
     // Push listing-card data directly without detail page visit
     for (const listing of listings.slice(0, remaining)) {

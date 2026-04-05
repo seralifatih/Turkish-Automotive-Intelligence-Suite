@@ -235,9 +235,9 @@ try {
 
     proxyConfiguration,
 
-    // Conservative concurrency for Arabam (less aggressive than Cluster 1)
-    maxConcurrency: 3,
-    maxRequestRetries: 3,
+    // Conservative concurrency for Arabam (detail pages are heavy on Apify containers)
+    maxConcurrency: 1,
+    maxRequestRetries: 2,
 
     // Arabam requires meaningful delays between requests
     requestHandlerTimeoutSecs: 120,
@@ -245,7 +245,39 @@ try {
 
     // Set Turkish browser headers on every page
     preNavigationHooks: [
-      async ({ page }) => {
+      async ({ page, request }, gotoOptions) => {
+        const pageWithRouteFlag = page as typeof page & { __arabamRouteSetup?: boolean };
+        const isDetailPage = request.url.includes('/ilan/');
+
+        gotoOptions.waitUntil = 'domcontentloaded';
+        gotoOptions.timeout = isDetailPage ? 45_000 : 40_000;
+
+        if (!pageWithRouteFlag.__arabamRouteSetup) {
+          await page.route('**/*', async (route) => {
+            const resourceType = route.request().resourceType();
+            const url = route.request().url();
+
+            if (resourceType === 'image' || resourceType === 'media' || resourceType === 'font') {
+              await route.abort();
+              return;
+            }
+
+            if (
+              url.includes('googletagmanager.com') ||
+              url.includes('google-analytics.com') ||
+              url.includes('doubleclick.net') ||
+              url.includes('facebook.net') ||
+              url.includes('creativecdn.com')
+            ) {
+              await route.abort();
+              return;
+            }
+
+            await route.continue();
+          });
+          pageWithRouteFlag.__arabamRouteSetup = true;
+        }
+
         await page.setExtraHTTPHeaders({
           'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -265,8 +297,12 @@ try {
 
     postNavigationHooks: [
       async ({ page, request }) => {
-        // Random delay between 3-8 seconds after page load (anti-bot)
-        const delay = 3000 + Math.floor(Math.random() * 5000);
+        const isDetailPage = request.url.includes('/ilan/');
+
+        // Keep a small human-like pause, but avoid burning most of the Apify run budget.
+        const delay = isDetailPage
+          ? 600 + Math.floor(Math.random() * 900)
+          : 1200 + Math.floor(Math.random() * 1200);
         await page.waitForTimeout(delay);
 
         // Light mouse movement to appear human
