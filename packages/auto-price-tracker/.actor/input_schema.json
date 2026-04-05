@@ -1,0 +1,87 @@
+{
+  "title": "Turkish Auto Price Tracker Input",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "vehicles": {
+      "title": "Vehicle Specifications",
+      "type": "array",
+      "description": "One or more vehicle specs to get price reports for. Each produces one PriceSummary.",
+      "editor": "json",
+      "prefill": [
+        {
+          "make": "Volkswagen",
+          "model": "Passat",
+          "yearMin": 2018,
+          "yearMax": 2022,
+          "fuelType": "dizel",
+          "transmission": "otomatik"
+        }
+      ],
+      "example": [
+        {
+          "make": "Toyota",
+          "model": "Corolla",
+          "yearMin": 2019,
+          "yearMax": 2023,
+          "fuelType": "benzin"
+        },
+        {
+          "make": "BMW",
+          "model": "3 Serisi",
+          "yearMin": 2020,
+          "yearMax": 2024
+        }
+      ]
+    },
+    "platforms": {
+      "title": "Platforms",
+      "type": "array",
+      "description": "Which platforms to scrape. arabam.com works without cookies. sahibinden.com requires session cookies (see sahibindenCookies). otomoto is currently inactive.",
+      "editor": "stringList",
+      "prefill": ["arabam", "sahibinden"],
+      "items": {
+        "type": "string",
+        "enum": ["arabam", "sahibinden", "otomoto"]
+      }
+    },
+    "city": {
+      "title": "City Filter",
+      "type": "string",
+      "description": "Optional. Filter listings by Turkish city name (e.g. 'istanbul', 'ankara', 'izmir'). Applied to all platforms.",
+      "editor": "textfield",
+      "example": "istanbul"
+    },
+    "maxListingsPerPlatform": {
+      "title": "Max Listings Per Platform",
+      "type": "integer",
+      "description": "Maximum number of listings to collect per platform per vehicle spec. More listings = better statistical accuracy. Default 50.",
+      "minimum": 5,
+      "maximum": 500,
+      "default": 50,
+      "prefill": 50
+    },
+    "sahibindenCookies": {
+      "title": "Sahibinden Session Cookies",
+      "type": "array",
+      "description": "Optional, but required to actually scrape Sahibinden. If omitted while 'sahibinden' is selected, the actor logs a warning and skips that platform. Export your session cookies from sahibinden.com using the EditThisCookie browser extension (Chrome) or Cookie-Editor (Firefox). Each object must have 'name' and 'value'.",
+      "editor": "json",
+      "example": [
+        { "name": "SID", "value": "your-session-id-here" },
+        { "name": "SIDd", "value": "your-session-data-here" }
+      ]
+    },
+    "proxyConfig": {
+      "title": "Proxy Configuration",
+      "type": "object",
+      "description": "Proxy settings. TR residential proxies required for Sahibinden. Recommended for Arabam.",
+      "editor": "proxy",
+      "prefill": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": ["RESIDENTIAL"],
+        "countryCode": "TR"
+      }
+    }
+  },
+  "required": ["vehicles"]
+}

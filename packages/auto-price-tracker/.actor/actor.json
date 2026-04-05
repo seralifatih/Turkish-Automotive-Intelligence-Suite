@@ -1,0 +1,67 @@
+{
+  "actorSpecification": 1,
+  "name": "auto-price-tracker",
+  "title": "Turkish Auto Price Tracker - Arabam and Sahibinden Price Comparison",
+  "description": "Vehicle valuation tool for Turkey. Given a vehicle spec (make, model, year, fuel, transmission), searches Arabam.com and Sahibinden.com and returns statistical price reports: average, median, percentiles, mileage buckets, and seller-type analysis.",
+  "version": "1.0.0",
+  "buildTag": "latest",
+  "dockerfile": "../Dockerfile",
+  "dockerContextDir": "../..",
+  "readme": "./README.md",
+  "input": "./input_schema.json",
+  "storages": {
+    "dataset": {
+      "actorSpecification": 1,
+      "views": {
+        "summaries": {
+          "title": "Price Summaries",
+          "transformation": {
+            "filter": "type == 'PRICE_SUMMARY'",
+            "fields": [
+              "vehicleSpec.make", "vehicleSpec.model", "vehicleSpec.yearRange",
+              "totalListingsUsed", "overall.medianPrice", "overall.averagePrice",
+              "overall.minPrice", "overall.maxPrice", "overall.stdDeviation",
+              "generatedAt"
+            ]
+          },
+          "display": {
+            "component": "table",
+            "properties": {
+              "vehicleSpec.make": { "label": "Make", "format": "text" },
+              "vehicleSpec.model": { "label": "Model", "format": "text" },
+              "vehicleSpec.yearRange": { "label": "Year Range", "format": "text" },
+              "totalListingsUsed": { "label": "Listings Used", "format": "number" },
+              "overall.medianPrice": { "label": "Median Price (TRY)", "format": "number" },
+              "overall.averagePrice": { "label": "Avg Price (TRY)", "format": "number" },
+              "overall.minPrice": { "label": "Min (TRY)", "format": "number" },
+              "overall.maxPrice": { "label": "Max (TRY)", "format": "number" }
+            }
+          }
+        },
+        "priceRecords": {
+          "title": "Individual Listings",
+          "transformation": {
+            "filter": "type == 'PRICE_RECORD'",
+            "fields": [
+              "platform", "make", "model", "year", "price", "mileage",
+              "fuelType", "transmission", "sellerType", "city", "listingUrl"
+            ]
+          },
+          "display": {
+            "component": "table",
+            "properties": {
+              "platform": { "label": "Platform", "format": "text" },
+              "make": { "label": "Make", "format": "text" },
+              "model": { "label": "Model", "format": "text" },
+              "year": { "label": "Year", "format": "number" },
+              "price": { "label": "Price (TRY)", "format": "number" },
+              "mileage": { "label": "Mileage (km)", "format": "number" },
+              "sellerType": { "label": "Seller", "format": "text" },
+              "city": { "label": "City", "format": "text" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

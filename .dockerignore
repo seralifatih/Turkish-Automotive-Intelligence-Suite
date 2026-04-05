@@ -1,0 +1,16 @@
+.git
+.agents
+.claude
+.claude-plugin
+.codex
+.codex-plugin
+node_modules
+**/node_modules
+dist
+**/dist
+storage
+**/storage
+.cache
+**/.cache
+.turbo
+**/.turbo

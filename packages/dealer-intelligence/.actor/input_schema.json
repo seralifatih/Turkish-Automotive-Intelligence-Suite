@@ -1,0 +1,78 @@
+{
+  "title": "Turkish Auto Dealer Intelligence Input",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "platforms": {
+      "title": "Platforms",
+      "type": "array",
+      "description": "Which platforms to scrape dealer profiles from.",
+      "editor": "stringList",
+      "prefill": ["arabam", "sahibinden"],
+      "items": {
+        "type": "string",
+        "enum": ["arabam", "sahibinden"]
+      }
+    },
+    "dealerUrls": {
+      "title": "Direct Dealer URLs",
+      "type": "array",
+      "description": "Direct arabam.com/galeri/ or sahibinden.com/magaza/ profile page URLs. Use this for specific dealers.",
+      "editor": "stringList",
+      "example": [
+        "https://www.arabam.com/galeri/reform-motors",
+        "https://www.arabam.com/galeri/gap-auto-istanbul"
+      ]
+    },
+    "searchByCity": {
+      "title": "Search by City",
+      "type": "string",
+      "description": "Discover all dealers in this city. Turkish city name (e.g. 'istanbul', 'ankara', 'izmir').",
+      "editor": "textfield",
+      "example": "istanbul"
+    },
+    "searchByMake": {
+      "title": "Search by Make",
+      "type": "string",
+      "description": "Discover dealers that have listings for this vehicle make (e.g. 'BMW', 'Toyota', 'Volkswagen').",
+      "editor": "textfield",
+      "example": "BMW"
+    },
+    "maxDealers": {
+      "title": "Maximum Dealers",
+      "type": "integer",
+      "description": "Maximum number of dealer profiles to scrape (1–500).",
+      "minimum": 1,
+      "maximum": 500,
+      "default": 50,
+      "prefill": 50
+    },
+    "includeInventory": {
+      "title": "Include Inventory Analysis",
+      "type": "boolean",
+      "description": "When enabled, scrapes the dealer's active listings (up to 100) and computes inventory statistics: average/median price, top makes, mileage distribution, and fuel type breakdown. Adds 10–50 requests per dealer — significantly slower and more expensive.",
+      "default": false,
+      "prefill": false
+    },
+    "sahibindenCookies": {
+      "title": "Sahibinden Session Cookies",
+      "type": "array",
+      "description": "Optional, but required to actually scrape Sahibinden. If omitted while 'sahibinden' is selected, the actor logs a warning and skips that platform. Export cookies from sahibinden.com using EditThisCookie (Chrome) or Cookie-Editor (Firefox).",
+      "editor": "json",
+      "example": [
+        { "name": "SID", "value": "your-session-id-here" }
+      ]
+    },
+    "proxyConfig": {
+      "title": "Proxy Configuration",
+      "type": "object",
+      "description": "Proxy settings. TR residential proxies required for Sahibinden, recommended for Arabam.",
+      "editor": "proxy",
+      "prefill": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": ["RESIDENTIAL"],
+        "countryCode": "TR"
+      }
+    }
+  }
+}

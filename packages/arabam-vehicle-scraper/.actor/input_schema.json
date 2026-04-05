@@ -1,0 +1,123 @@
+{
+  "title": "Arabam.com Vehicle Scraper Input",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "searchUrls": {
+      "title": "Search URLs",
+      "type": "array",
+      "description": "Direct arabam.com search/category result page URLs. Use this OR filters, not both.",
+      "editor": "stringList",
+      "prefill": ["https://www.arabam.com/ikinci-el/otomobil/volkswagen-passat"],
+      "example": ["https://www.arabam.com/ikinci-el/otomobil/volkswagen-passat"]
+    },
+    "listingUrls": {
+      "title": "Listing URLs",
+      "type": "array",
+      "description": "Direct arabam.com vehicle detail page URLs to scrape. Combined with other inputs.",
+      "editor": "stringList",
+      "example": ["https://www.arabam.com/ilan/galeriden-satilik-volkswagen-passat/39355250"]
+    },
+    "filters": {
+      "title": "Search Filters",
+      "type": "object",
+      "description": "Build search URL from filters (used when searchUrls is not provided).",
+      "editor": "json",
+      "properties": {
+        "make": {
+          "title": "Make",
+          "type": "string",
+          "description": "Vehicle make/brand in Turkish-lowercase slug form (e.g. 'volkswagen', 'toyota', 'bmw')",
+          "example": "volkswagen"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string",
+          "description": "Vehicle model in slug form (e.g. 'passat', 'corolla')",
+          "example": "passat"
+        },
+        "yearMin": {
+          "title": "Minimum Year",
+          "type": "integer",
+          "minimum": 1970,
+          "maximum": 2030,
+          "example": 2018
+        },
+        "yearMax": {
+          "title": "Maximum Year",
+          "type": "integer",
+          "minimum": 1970,
+          "maximum": 2030,
+          "example": 2023
+        },
+        "priceMin": {
+          "title": "Minimum Price (TRY)",
+          "type": "integer",
+          "example": 500000
+        },
+        "priceMax": {
+          "title": "Maximum Price (TRY)",
+          "type": "integer",
+          "example": 2000000
+        },
+        "mileageMax": {
+          "title": "Maximum Mileage (km)",
+          "type": "integer",
+          "example": 150000
+        },
+        "fuelType": {
+          "title": "Fuel Type",
+          "type": "string",
+          "description": "Fuel type filter",
+          "enum": ["benzin", "dizel", "lpg", "hybrid", "elektrik", "benzin_lpg"],
+          "example": "dizel"
+        },
+        "transmission": {
+          "title": "Transmission",
+          "type": "string",
+          "enum": ["manuel", "otomatik", "yarı_otomatik"],
+          "example": "otomatik"
+        },
+        "city": {
+          "title": "City",
+          "type": "string",
+          "description": "Filter by city (Turkish name, e.g. 'istanbul', 'ankara', 'izmir')",
+          "example": "istanbul"
+        },
+        "bodyType": {
+          "title": "Body Type",
+          "type": "string",
+          "enum": ["sedan", "hatchback", "station_wagon", "suv", "coupe", "cabrio", "minivan", "pickup"],
+          "example": "sedan"
+        }
+      }
+    },
+    "maxListings": {
+      "title": "Maximum Listings",
+      "type": "integer",
+      "description": "Maximum number of vehicle listings to scrape (1–10,000).",
+      "minimum": 1,
+      "maximum": 10000,
+      "default": 200,
+      "prefill": 200
+    },
+    "scrapeDetails": {
+      "title": "Scrape Detail Pages",
+      "type": "boolean",
+      "description": "When enabled, visits each listing's detail page for complete specs, paint condition, accident history, and seller contact. Slower but comprehensive. Disable to get only listing-card data.",
+      "default": true,
+      "prefill": true
+    },
+    "proxyConfig": {
+      "title": "Proxy Configuration",
+      "type": "object",
+      "description": "Proxy settings. Residential TR proxies are strongly recommended for reliability.",
+      "editor": "proxy",
+      "prefill": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": ["RESIDENTIAL"],
+        "countryCode": "TR"
+      }
+    }
+  }
+}

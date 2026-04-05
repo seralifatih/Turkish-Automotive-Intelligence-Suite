@@ -1,0 +1,43 @@
+{
+  "actorSpecification": 1,
+  "name": "dealer-intelligence",
+  "title": "Turkish Auto Dealer Intelligence — Galeri Profiles & Inventory Analysis",
+  "description": "Scrape dealer (galeri/mağaza) profiles from Arabam.com and Sahibinden.com. Extract name, city, listing count, rating, member since, badges, and contact info. Optional inventory analysis: average price, top makes, mileage distribution, and fuel type breakdown across the dealer's active listings.",
+  "version": "1.0.0",
+  "buildTag": "latest",
+  "dockerfile": "../Dockerfile",
+  "dockerContextDir": "../..",
+  "readme": "./README.md",
+  "input": "./input_schema.json",
+  "storages": {
+    "dataset": {
+      "actorSpecification": 1,
+      "views": {
+        "dealers": {
+          "title": "Dealer Profiles",
+          "transformation": {
+            "filter": "type == 'DEALER_PROFILE'",
+            "fields": [
+              "platform", "dealerName", "city", "district",
+              "activeListingCount", "rating", "verified",
+              "memberSince", "phone", "dealerUrl"
+            ]
+          },
+          "display": {
+            "component": "table",
+            "properties": {
+              "platform": { "label": "Platform", "format": "text" },
+              "dealerName": { "label": "Dealer Name", "format": "text" },
+              "city": { "label": "City", "format": "text" },
+              "district": { "label": "District", "format": "text" },
+              "activeListingCount": { "label": "Active Listings", "format": "number" },
+              "rating": { "label": "Rating", "format": "number" },
+              "verified": { "label": "Verified", "format": "boolean" },
+              "memberSince": { "label": "Member Since", "format": "text" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
