@@ -6,39 +6,46 @@
     "searchUrls": {
       "title": "Search URLs",
       "type": "array",
-      "description": "Direct arabam.com search/category result page URLs. Use this OR filters, not both.",
+      "description": "Direct arabam.com search or category result page URLs. Use this or filters, not both.",
       "editor": "stringList",
-      "prefill": ["https://www.arabam.com/ikinci-el/otomobil/volkswagen-passat"],
-      "example": ["https://www.arabam.com/ikinci-el/otomobil/volkswagen-passat"]
+      "prefill": [
+        "https://www.arabam.com/ikinci-el/otomobil/volkswagen-passat"
+      ],
+      "example": [
+        "https://www.arabam.com/ikinci-el/otomobil/volkswagen-passat"
+      ]
     },
     "listingUrls": {
       "title": "Listing URLs",
       "type": "array",
-      "description": "Direct arabam.com vehicle detail page URLs to scrape. Combined with other inputs.",
+      "description": "Direct arabam.com vehicle detail page URLs to scrape. Can be combined with other inputs.",
       "editor": "stringList",
-      "example": ["https://www.arabam.com/ilan/galeriden-satilik-volkswagen-passat/39355250"]
+      "example": [
+        "https://www.arabam.com/ilan/galeriden-satilik-volkswagen-passat/39355250"
+      ]
     },
     "filters": {
       "title": "Search Filters",
       "type": "object",
-      "description": "Build search URL from filters (used when searchUrls is not provided).",
+      "description": "Build a search URL from filters when searchUrls is not provided.",
       "editor": "json",
       "properties": {
         "make": {
           "title": "Make",
           "type": "string",
-          "description": "Vehicle make/brand in Turkish-lowercase slug form (e.g. 'volkswagen', 'toyota', 'bmw')",
+          "description": "Vehicle make or brand in slug form, for example 'volkswagen', 'toyota', or 'bmw'.",
           "example": "volkswagen"
         },
         "model": {
           "title": "Model",
           "type": "string",
-          "description": "Vehicle model in slug form (e.g. 'passat', 'corolla')",
+          "description": "Vehicle model in slug form, for example 'passat' or 'corolla'.",
           "example": "passat"
         },
         "yearMin": {
           "title": "Minimum Year",
           "type": "integer",
+          "description": "Optional. Minimum model year to include in the search.",
           "minimum": 1970,
           "maximum": 2030,
           "example": 2018
@@ -46,6 +53,7 @@
         "yearMax": {
           "title": "Maximum Year",
           "type": "integer",
+          "description": "Optional. Maximum model year to include in the search.",
           "minimum": 1970,
           "maximum": 2030,
           "example": 2023
@@ -53,40 +61,45 @@
         "priceMin": {
           "title": "Minimum Price (TRY)",
           "type": "integer",
+          "description": "Optional. Minimum asking price in Turkish lira.",
           "example": 500000
         },
         "priceMax": {
           "title": "Maximum Price (TRY)",
           "type": "integer",
+          "description": "Optional. Maximum asking price in Turkish lira.",
           "example": 2000000
         },
         "mileageMax": {
           "title": "Maximum Mileage (km)",
           "type": "integer",
+          "description": "Optional. Maximum mileage in kilometers.",
           "example": 150000
         },
         "fuelType": {
           "title": "Fuel Type",
           "type": "string",
-          "description": "Fuel type filter",
+          "description": "Optional. Fuel type filter.",
           "enum": ["benzin", "dizel", "lpg", "hybrid", "elektrik", "benzin_lpg"],
           "example": "dizel"
         },
         "transmission": {
           "title": "Transmission",
           "type": "string",
+          "description": "Optional. Transmission type filter.",
           "enum": ["manuel", "otomatik", "yarı_otomatik"],
           "example": "otomatik"
         },
         "city": {
           "title": "City",
           "type": "string",
-          "description": "Filter by city (Turkish name, e.g. 'istanbul', 'ankara', 'izmir')",
+          "description": "Optional. Filter by city, for example 'istanbul', 'ankara', or 'izmir'.",
           "example": "istanbul"
         },
         "bodyType": {
           "title": "Body Type",
           "type": "string",
+          "description": "Optional. Body style filter.",
           "enum": ["sedan", "hatchback", "station_wagon", "suv", "coupe", "cabrio", "minivan", "pickup"],
           "example": "sedan"
         }
@@ -95,7 +108,7 @@
     "maxListings": {
       "title": "Maximum Listings",
       "type": "integer",
-      "description": "Maximum number of vehicle listings to scrape (1–10,000).",
+      "description": "Maximum number of vehicle listings to scrape, from 1 to 10000.",
       "minimum": 1,
       "maximum": 10000,
       "default": 200,
@@ -104,14 +117,14 @@
     "scrapeDetails": {
       "title": "Scrape Detail Pages",
       "type": "boolean",
-      "description": "When enabled, visits each listing's detail page for complete specs, paint condition, accident history, and seller contact. Slower but comprehensive. Disable to get only listing-card data.",
+      "description": "When enabled, visits each listing detail page for complete specs, paint condition, accident history, and seller contact details. Disable for faster card-only scraping.",
       "default": true,
       "prefill": true
     },
     "proxyConfig": {
       "title": "Proxy Configuration",
       "type": "object",
-      "description": "Proxy settings. Residential TR proxies are strongly recommended for reliability.",
+      "description": "Proxy settings. Turkish residential proxies are strongly recommended for reliability.",
       "editor": "proxy",
       "prefill": {
         "useApifyProxy": true,
