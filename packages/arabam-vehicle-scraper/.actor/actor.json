@@ -5,7 +5,7 @@
   "description": "Comprehensive vehicle listing extractor for arabam.com — Turkey's largest dedicated automotive marketplace. Scrapes full vehicle specs, paint condition, accident history, seller info, and pricing. Supports filter-based search and direct URL modes.",
   "version": "1.0.0",
   "buildTag": "latest",
-  "environmentVariables": [],
+  "environmentVariables": {},
   "dockerfile": "../Dockerfile",
   "dockerContextDir": "../..",
   "readme": "./README.md",
