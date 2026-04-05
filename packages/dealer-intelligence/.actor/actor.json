@@ -1,14 +1,15 @@
 {
   "actorSpecification": 1,
   "name": "dealer-intelligence",
-  "title": "Turkish Auto Dealer Intelligence — Galeri Profiles & Inventory Analysis",
-  "description": "Scrape dealer (galeri/mağaza) profiles from Arabam.com and Sahibinden.com. Extract name, city, listing count, rating, member since, badges, and contact info. Optional inventory analysis: average price, top makes, mileage distribution, and fuel type breakdown across the dealer's active listings.",
+  "title": "Turkish Auto Dealer Intelligence - Dealer Profiles and Inventory Analysis",
+  "description": "Scrape Turkish used-car dealer profiles from Arabam.com and Sahibinden.com, including identity, contact details, trust signals, and optional inventory-level pricing analysis.",
   "version": "1.0.0",
   "buildTag": "latest",
   "dockerfile": "../Dockerfile",
   "dockerContextDir": "../../..",
   "readme": "./README.md",
   "input": "./input_schema.json",
+  "output": "./output_schema.json",
   "storages": {
     "dataset": {
       "actorSpecification": 1,
@@ -18,9 +19,16 @@
           "transformation": {
             "filter": "type == 'DEALER_PROFILE'",
             "fields": [
-              "platform", "dealerName", "city", "district",
-              "activeListingCount", "rating", "verified",
-              "memberSince", "phone", "dealerUrl"
+              "platform",
+              "dealerName",
+              "city",
+              "district",
+              "activeListingCount",
+              "rating",
+              "verified",
+              "memberSince",
+              "phone",
+              "dealerUrl"
             ]
           },
           "display": {
@@ -34,6 +42,62 @@
               "rating": { "label": "Rating", "format": "number" },
               "verified": { "label": "Verified", "format": "boolean" },
               "memberSince": { "label": "Member Since", "format": "text" }
+            }
+          }
+        },
+        "inventory": {
+          "title": "Inventory Analysis",
+          "transformation": {
+            "filter": "type == 'DEALER_PROFILE'",
+            "fields": [
+              "platform",
+              "dealerName",
+              "city",
+              "inventory.totalListings",
+              "inventory.averagePrice",
+              "inventory.medianPrice",
+              "inventory.priceRange.min",
+              "inventory.priceRange.max"
+            ]
+          },
+          "display": {
+            "component": "table",
+            "properties": {
+              "platform": { "label": "Platform", "format": "text" },
+              "dealerName": { "label": "Dealer Name", "format": "text" },
+              "city": { "label": "City", "format": "text" },
+              "inventory.totalListings": { "label": "Inventory Size", "format": "number" },
+              "inventory.averagePrice": { "label": "Avg Price (TRY)", "format": "number" },
+              "inventory.medianPrice": { "label": "Median Price (TRY)", "format": "number" },
+              "inventory.priceRange.min": { "label": "Min Price (TRY)", "format": "number" },
+              "inventory.priceRange.max": { "label": "Max Price (TRY)", "format": "number" }
+            }
+          }
+        },
+        "runSummary": {
+          "title": "Run Summary",
+          "transformation": {
+            "filter": "type == 'RUN_SUMMARY'",
+            "fields": [
+              "totalRecords",
+              "platformResults.arabam",
+              "platformResults.sahibinden",
+              "durationSeconds",
+              "errors",
+              "blockedPlatforms",
+              "warnings"
+            ]
+          },
+          "display": {
+            "component": "table",
+            "properties": {
+              "totalRecords": { "label": "Records", "format": "number" },
+              "platformResults.arabam": { "label": "Arabam", "format": "number" },
+              "platformResults.sahibinden": { "label": "Sahibinden", "format": "number" },
+              "durationSeconds": { "label": "Duration (s)", "format": "number" },
+              "errors": { "label": "Errors", "format": "number" },
+              "blockedPlatforms": { "label": "Blocked Platforms", "format": "text" },
+              "warnings": { "label": "Warnings", "format": "text" }
             }
           }
         }

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://apify-projects.github.io/actor-json-schemas/output.json?v=0.3",
+  "actorOutputSchemaVersion": 1,
+  "title": "Output schema of Turkish Auto Dealer Intelligence",
+  "description": "This actor stores DEALER_PROFILE and RUN_SUMMARY records in the default dataset, including optional inventory analysis nested inside dealer profiles.",
+  "type": "object",
+  "properties": {
+    "dealerProfiles": {
+      "type": "string",
+      "title": "Dealer profiles",
+      "description": "Structured dealer profile rows with platform, location, contact details, trust signals, and source URLs. In Apify Console this opens the dealer profile view by default.",
+      "template": "{{links.apiDefaultDatasetUrl}}/items?view=dealers"
+    },
+    "inventoryAnalysis": {
+      "type": "string",
+      "title": "Inventory analysis",
+      "description": "Dealer profile rows focused on nested inventory summary metrics such as listing count and price ranges when includeInventory is enabled.",
+      "template": "{{links.apiDefaultDatasetUrl}}/items?view=inventory"
+    },
+    "runSummary": {
+      "type": "string",
+      "title": "Run summary",
+      "description": "RUN_SUMMARY dataset row with record counts, platform coverage, timing, and warnings for the dealer intelligence run.",
+      "template": "{{links.apiDefaultDatasetUrl}}/items?view=runSummary"
+    }
+  }
+}

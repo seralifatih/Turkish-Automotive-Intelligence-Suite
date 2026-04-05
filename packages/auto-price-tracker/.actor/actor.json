@@ -1,14 +1,15 @@
 {
   "actorSpecification": 1,
   "name": "auto-price-tracker",
-  "title": "Turkish Auto Price Tracker - Arabam and Sahibinden Price Comparison",
-  "description": "Vehicle valuation tool for Turkey. Given a vehicle spec (make, model, year, fuel, transmission), searches Arabam.com and Sahibinden.com and returns statistical price reports: average, median, percentiles, mileage buckets, and seller-type analysis.",
+  "title": "Turkish Auto Price Tracker - Arabam and Sahibinden Valuation API",
+  "description": "Search Arabam.com and Sahibinden.com for matching vehicles and return listing-level price records plus statistical valuation summaries, percentiles, mileage buckets, and seller-type breakdowns.",
   "version": "1.0.0",
   "buildTag": "latest",
   "dockerfile": "../Dockerfile",
   "dockerContextDir": "../../..",
   "readme": "./README.md",
   "input": "./input_schema.json",
+  "output": "./output_schema.json",
   "storages": {
     "dataset": {
       "actorSpecification": 1,
@@ -18,9 +19,15 @@
           "transformation": {
             "filter": "type == 'PRICE_SUMMARY'",
             "fields": [
-              "vehicleSpec.make", "vehicleSpec.model", "vehicleSpec.yearRange",
-              "totalListingsUsed", "overall.medianPrice", "overall.averagePrice",
-              "overall.minPrice", "overall.maxPrice", "overall.stdDeviation",
+              "vehicleSpec.make",
+              "vehicleSpec.model",
+              "vehicleSpec.yearRange",
+              "totalListingsUsed",
+              "overall.medianPrice",
+              "overall.averagePrice",
+              "overall.minPrice",
+              "overall.maxPrice",
+              "overall.stdDeviation",
               "generatedAt"
             ]
           },
@@ -43,8 +50,17 @@
           "transformation": {
             "filter": "type == 'PRICE_RECORD'",
             "fields": [
-              "platform", "make", "model", "year", "price", "mileage",
-              "fuelType", "transmission", "sellerType", "city", "listingUrl"
+              "platform",
+              "make",
+              "model",
+              "year",
+              "price",
+              "mileage",
+              "fuelType",
+              "transmission",
+              "sellerType",
+              "city",
+              "listingUrl"
             ]
           },
           "display": {
@@ -58,6 +74,37 @@
               "mileage": { "label": "Mileage (km)", "format": "number" },
               "sellerType": { "label": "Seller", "format": "text" },
               "city": { "label": "City", "format": "text" }
+            }
+          }
+        },
+        "runSummary": {
+          "title": "Run Summary",
+          "transformation": {
+            "filter": "type == 'RUN_SUMMARY'",
+            "fields": [
+              "totalVehicleSpecs",
+              "totalPriceRecords",
+              "platformResults.arabam",
+              "platformResults.sahibinden",
+              "platformResults.otomoto",
+              "durationSeconds",
+              "errors",
+              "blockedPlatforms",
+              "warnings"
+            ]
+          },
+          "display": {
+            "component": "table",
+            "properties": {
+              "totalVehicleSpecs": { "label": "Vehicle Specs", "format": "number" },
+              "totalPriceRecords": { "label": "Price Records", "format": "number" },
+              "platformResults.arabam": { "label": "Arabam", "format": "number" },
+              "platformResults.sahibinden": { "label": "Sahibinden", "format": "number" },
+              "platformResults.otomoto": { "label": "OtoMoto", "format": "number" },
+              "durationSeconds": { "label": "Duration (s)", "format": "number" },
+              "errors": { "label": "Errors", "format": "number" },
+              "blockedPlatforms": { "label": "Blocked Platforms", "format": "text" },
+              "warnings": { "label": "Warnings", "format": "text" }
             }
           }
         }

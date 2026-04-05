@@ -1,0 +1,27 @@
+{
+  "$schema": "https://apify-projects.github.io/actor-json-schemas/output.json?v=0.3",
+  "actorOutputSchemaVersion": 1,
+  "title": "Output schema of Turkish Auto Price Tracker",
+  "description": "This actor stores PRICE_RECORD, PRICE_SUMMARY, and RUN_SUMMARY records in the default dataset.",
+  "type": "object",
+  "properties": {
+    "priceSummaries": {
+      "type": "string",
+      "title": "Price summaries",
+      "description": "Aggregated valuation summaries for each requested vehicle spec, including averages, medians, percentiles, platform breakdowns, and seller-type analysis.",
+      "template": "{{links.apiDefaultDatasetUrl}}/items?view=summaries"
+    },
+    "priceRecords": {
+      "type": "string",
+      "title": "Price records",
+      "description": "Listing-level PRICE_RECORD rows collected from the selected marketplaces for each requested vehicle spec.",
+      "template": "{{links.apiDefaultDatasetUrl}}/items?view=priceRecords"
+    },
+    "runSummary": {
+      "type": "string",
+      "title": "Run summary",
+      "description": "RUN_SUMMARY dataset row with total vehicle specs processed, total price records collected, platform counts, timing, and warnings.",
+      "template": "{{links.apiDefaultDatasetUrl}}/items?view=runSummary"
+    }
+  }
+}

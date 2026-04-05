@@ -1,0 +1,21 @@
+{
+  "$schema": "https://apify-projects.github.io/actor-json-schemas/output.json?v=0.3",
+  "actorOutputSchemaVersion": 1,
+  "title": "Output schema of Arabam.com Vehicle Scraper",
+  "description": "This actor stores scraped vehicle listings and a RUN_SUMMARY record in the default dataset.",
+  "type": "object",
+  "properties": {
+    "vehicleListings": {
+      "type": "string",
+      "title": "Vehicle listings",
+      "description": "Structured vehicle listing records from Arabam.com. In Apify Console this opens the overview dataset view by default.",
+      "template": "{{links.apiDefaultDatasetUrl}}/items?view=overview"
+    },
+    "runSummary": {
+      "type": "string",
+      "title": "Run summary",
+      "description": "RUN_SUMMARY dataset row with totals, duration, warnings, and the effective input summary for the scrape.",
+      "template": "{{links.apiDefaultDatasetUrl}}/items?view=runSummary"
+    }
+  }
+}
