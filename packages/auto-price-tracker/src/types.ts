@@ -180,6 +180,8 @@ export interface RunSummary {
 }
 
 export interface RawListing {
+  title?: string | null;
+  variant?: string | null;
   price: number | null;
   year: number | null;
   mileage: number | null;

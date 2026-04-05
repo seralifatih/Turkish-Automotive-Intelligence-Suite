@@ -128,7 +128,7 @@ async function scrapeOnePlatform(
         requestHandlerTimeoutSecs: 90,
         navigationTimeoutSecs: 60,
         preNavigationHooks: [
-          async ({ page, request }) => {
+          async ({ page, request }, gotoOptions) => {
             await page.setExtraHTTPHeaders({
               'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8',
             });
@@ -139,6 +139,34 @@ async function scrapeOnePlatform(
               await stealth.setup(input.sahibindenCookies ?? []);
               await stealth.applyPageViewport(page);
               return;
+            }
+
+            if (currentPlatform === 'arabam') {
+              const pageWithRouteFlag = page as typeof page & { __arabamRouteSetup?: boolean };
+              gotoOptions.waitUntil = 'domcontentloaded';
+              gotoOptions.timeout = 40_000;
+
+              if (!pageWithRouteFlag.__arabamRouteSetup) {
+                await page.route('**/*', async (route) => {
+                  const resourceType = route.request().resourceType();
+                  const resourceUrl = route.request().url();
+
+                  if (['image', 'media', 'font'].includes(resourceType)) {
+                    await route.abort();
+                    return;
+                  }
+
+                  if (
+                    /google-analytics|googletagmanager|doubleclick|facebook|hotjar|creativecdn/i.test(resourceUrl)
+                  ) {
+                    await route.abort();
+                    return;
+                  }
+
+                  await route.continue();
+                });
+                pageWithRouteFlag.__arabamRouteSetup = true;
+              }
             }
 
             const viewports = [
@@ -154,8 +182,8 @@ async function scrapeOnePlatform(
           async ({ page, request }) => {
             // Platform-specific delays
             const currentPlatform = (request.userData as { platform: Platform }).platform;
-            const minDelay = currentPlatform === 'sahibinden' ? 5000 : 3000;
-            const maxDelay = currentPlatform === 'sahibinden' ? 12000 : 7000;
+            const minDelay = currentPlatform === 'sahibinden' ? 5000 : currentPlatform === 'arabam' ? 1200 : 3000;
+            const maxDelay = currentPlatform === 'sahibinden' ? 12000 : currentPlatform === 'arabam' ? 2500 : 7000;
             const delay = minDelay + Math.floor(Math.random() * (maxDelay - minDelay));
 
             if (currentPlatform === 'sahibinden') {
@@ -173,7 +201,7 @@ async function scrapeOnePlatform(
           };
 
           if (ctx.platform === 'arabam') {
-            const result = await scrapeArabamPage(page, ctx.spec);
+            const result = await scrapeArabamPage(page, ctx.spec, input.city);
             pageRecords = result.listings
               .filter((l) => l.price)
               .map((l) => toArabamPriceRecord(l, ctx.spec));
