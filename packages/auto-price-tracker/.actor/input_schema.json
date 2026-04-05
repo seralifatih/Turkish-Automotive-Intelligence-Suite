@@ -39,11 +39,7 @@
       "type": "array",
       "description": "Which platforms to scrape. arabam.com works without cookies. sahibinden.com requires session cookies (see sahibindenCookies). otomoto is currently inactive.",
       "editor": "stringList",
-      "prefill": ["arabam", "sahibinden"],
-      "items": {
-        "type": "string",
-        "enum": ["arabam", "sahibinden", "otomoto"]
-      }
+      "prefill": ["arabam", "sahibinden"]
     },
     "city": {
       "title": "City Filter",

@@ -8,11 +8,7 @@
       "type": "array",
       "description": "Which platforms to scrape dealer profiles from.",
       "editor": "stringList",
-      "prefill": ["arabam", "sahibinden"],
-      "items": {
-        "type": "string",
-        "enum": ["arabam", "sahibinden"]
-      }
+      "prefill": ["arabam", "sahibinden"]
     },
     "dealerUrls": {
       "title": "Direct Dealer URLs",
