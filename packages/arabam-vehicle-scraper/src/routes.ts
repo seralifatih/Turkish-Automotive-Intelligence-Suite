@@ -64,7 +64,7 @@ router.addHandler(LABEL.SEARCH, async ({ request, page, enqueueLinks, crawler }:
   const domCards = await extractDomCards(page);
   const listings = mergeListingData(insiderProducts, domCards);
 
-  log.info(`[SEARCH] Found ${listings.length} listings on page`);
+  log.info(`[SEARCH] Extracted ${insiderProducts.length} insider items and ${domCards.length} DOM cards; merged ${listings.length} listings`);
 
   if (listings.length === 0) {
     log.warning('[SEARCH] No listings found. Possible causes: Cloudflare block, page structure change, or empty results.');
@@ -320,8 +320,8 @@ router.addDefaultHandler(async ({ request, page }: PlaywrightCrawlingContext) =>
  * Pattern: /ilan/.../{numeric-id}
  */
 function extractListingId(url: string): string | null {
-  const match = url.match(/\/ilan\/[^/]+\/(\d+)/);
-  return match ? match[1] : null;
+  const matches = [...url.matchAll(/\/(\d+)(?=[/?#]|$)/g)];
+  return matches.length > 0 ? (matches[matches.length - 1]?.[1] ?? null) : null;
 }
 
 /**
