@@ -205,8 +205,8 @@ try {
   const errors: string[] = [];
 
   const crawler = new PlaywrightCrawler({
-    // Use non-headless mode — better Cloudflare bypass
-    headless: false,
+    // Headless is required on Apify containers — non-headless hangs or isn't supported
+    headless: true,
 
     launchContext: {
       launcher: chromium as never,
@@ -217,6 +217,8 @@ try {
           '--disable-blink-features=AutomationControlled',
           '--lang=tr-TR,tr',
           '--accept-lang=tr-TR,tr,en-US,en',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
         ],
       },
     },
@@ -235,22 +237,19 @@ try {
 
     proxyConfiguration,
 
-    // Conservative concurrency for Arabam (detail pages are heavy on Apify containers)
-    maxConcurrency: 1,
+    maxConcurrency: 3,
     maxRequestRetries: 2,
 
-    // Arabam requires meaningful delays between requests
-    requestHandlerTimeoutSecs: 120,
-    navigationTimeoutSecs: 60,
+    requestHandlerTimeoutSecs: 60,
+    navigationTimeoutSecs: 30,
 
-    // Set Turkish browser headers on every page
     preNavigationHooks: [
       async ({ page, request }, gotoOptions) => {
         const pageWithRouteFlag = page as typeof page & { __arabamRouteSetup?: boolean };
         const isDetailPage = request.url.includes('/ilan/');
 
         gotoOptions.waitUntil = 'domcontentloaded';
-        gotoOptions.timeout = isDetailPage ? 45_000 : 40_000;
+        gotoOptions.timeout = isDetailPage ? 25_000 : 20_000;
 
         if (!pageWithRouteFlag.__arabamRouteSetup) {
           await page.route('**/*', async (route) => {
@@ -283,7 +282,6 @@ try {
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         });
 
-        // Randomize viewport to a common desktop size
         const viewports = [
           { width: 1920, height: 1080 },
           { width: 1440, height: 900 },
@@ -299,20 +297,11 @@ try {
       async ({ page, request }) => {
         const isDetailPage = request.url.includes('/ilan/');
 
-        // Keep a small human-like pause, but avoid burning most of the Apify run budget.
+        // Shorter delays — enough to avoid rate limits but not blowing the run budget
         const delay = isDetailPage
-          ? 600 + Math.floor(Math.random() * 900)
-          : 1200 + Math.floor(Math.random() * 1200);
+          ? 300 + Math.floor(Math.random() * 400)
+          : 500 + Math.floor(Math.random() * 500);
         await page.waitForTimeout(delay);
-
-        // Light mouse movement to appear human
-        const vp = page.viewportSize();
-        if (vp) {
-          await page.mouse.move(
-            Math.floor(Math.random() * (vp.width * 0.8)) + vp.width * 0.1,
-            Math.floor(Math.random() * (vp.height * 0.8)) + vp.height * 0.1,
-          );
-        }
       },
     ],
 
