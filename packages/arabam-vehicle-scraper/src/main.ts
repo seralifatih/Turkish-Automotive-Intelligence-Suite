@@ -237,11 +237,18 @@ try {
 
     proxyConfiguration,
 
-    maxConcurrency: 3,
+    minConcurrency: 3,
+    maxConcurrency: 5,
     maxRequestRetries: 2,
 
-    requestHandlerTimeoutSecs: 60,
+    requestHandlerTimeoutSecs: 90,
     navigationTimeoutSecs: 30,
+
+    autoscaledPoolOptions: {
+      systemStatusOptions: {
+        maxCpuOverloadedRatio: 0.9,
+      },
+    },
 
     preNavigationHooks: [
       async ({ page, request }, gotoOptions) => {

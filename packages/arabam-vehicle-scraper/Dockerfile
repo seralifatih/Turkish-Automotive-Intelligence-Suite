@@ -15,4 +15,5 @@ RUN cd /home/myuser/app/packages/arabam-vehicle-scraper && npm install --include
 
 WORKDIR /home/myuser/app/packages/arabam-vehicle-scraper
 
-CMD ["npm", "start"]
+# Headless Chromium — skip xvfb wrapper from base image, run node directly.
+CMD ["node", "--experimental-vm-modules", "dist/main.js"]
