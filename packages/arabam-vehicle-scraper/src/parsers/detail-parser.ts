@@ -18,6 +18,7 @@ import {
   parseMileage,
   parseModelYear,
   parseEngineSize,
+  parseHorsePower,
   normalizeFuelType,
   normalizeTransmission,
   normalizeBodyType,
@@ -212,17 +213,27 @@ async function extractSpecsTable(page: Page): Promise<Record<string, string>> {
   return page.evaluate((): Record<string, string> => {
     const specs: Record<string, string> = {};
 
+    const cleanValue = (raw: string): string => {
+      // Drop "Kopyalandı" tooltip and similar "Kopya..." UI text, collapse whitespace.
+      return raw
+        .replace(/Kopyala(?:ndı|n)?/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    };
+
     // Primary: .property-item containers
     const items = document.querySelectorAll('.property-item');
     items.forEach((item) => {
-      const key =
+      const keyRaw =
         item.querySelector('.property-key')?.textContent?.trim() ??
         item.querySelector('dt')?.textContent?.trim() ??
         '';
-      const value =
-        item.querySelector('.property-value')?.textContent?.trim() ??
-        item.querySelector('dd')?.textContent?.trim() ??
+      const valueRaw =
+        item.querySelector('.property-value')?.textContent ??
+        item.querySelector('dd')?.textContent ??
         '';
+      const key = keyRaw.replace(/\s+/g, ' ').trim();
+      const value = cleanValue(valueRaw);
       if (key && value) specs[key] = value;
     });
 
@@ -231,8 +242,8 @@ async function extractSpecsTable(page: Page): Promise<Record<string, string>> {
       document.querySelectorAll('table.properties tr').forEach((row) => {
         const cells = row.querySelectorAll('td, th');
         if (cells.length >= 2) {
-          const key = cells[0].textContent?.trim() ?? '';
-          const value = cells[1].textContent?.trim() ?? '';
+          const key = (cells[0].textContent ?? '').replace(/\s+/g, ' ').trim();
+          const value = cleanValue(cells[1].textContent ?? '');
           if (key && value) specs[key] = value;
         }
       });
@@ -240,6 +251,19 @@ async function extractSpecsTable(page: Page): Promise<Record<string, string>> {
 
     return specs;
   });
+}
+
+/** Case-insensitive spec lookup — handles "Boya-değişen" vs "Boya-Değişen" mismatches. */
+function getSpec(specs: Record<string, string>, ...keys: string[]): string | null {
+  const lowerMap = new Map<string, string>();
+  for (const [k, v] of Object.entries(specs)) {
+    lowerMap.set(k.toLowerCase(), v);
+  }
+  for (const key of keys) {
+    const v = lowerMap.get(key.toLowerCase());
+    if (v) return v;
+  }
+  return null;
 }
 
 // ─── Image extraction ─────────────────────────────────────────────────────────
@@ -357,21 +381,37 @@ interface LocationInfo {
 
 async function extractLocation(page: Page): Promise<LocationInfo> {
   return page.evaluate((): LocationInfo => {
-    // Primary: .product-location
     const locEl =
       document.querySelector('.product-location') ??
       document.querySelector('[class*="product-location"]') ??
       document.querySelector('[class*="location-info"]');
 
-    const locText = locEl?.textContent?.trim() ?? '';
+    const locText = (locEl?.textContent ?? '').replace(/\s+/g, ' ').trim();
 
-    // Location format: "İstanbul / Kadıköy" or just "İstanbul"
+    // arabam common forms:
+    //   "Karacaahmet Mh. Şehitkamil, Gaziantep"   → district=Şehitkamil, city=Gaziantep
+    //   "Merkez Torbalı, İzmir"                    → district=Torbalı, city=İzmir
+    //   "İstanbul / Kadıköy"                       → city=İstanbul, district=Kadıköy
+    //   "İstanbul"                                 → city=İstanbul
+
+    if (locText.includes(',')) {
+      const parts = locText.split(',').map((s) => s.trim()).filter(Boolean);
+      const city = parts[parts.length - 1] ?? null;
+      const districtPart = parts[parts.length - 2] ?? null;
+      // Strip leading neighborhood (e.g. "Mh." abbreviation) — keep last word as district.
+      let district: string | null = null;
+      if (districtPart) {
+        const tokens = districtPart.split(/\s+/).filter((t) => !/^(Mh\.?|Mahallesi|Merkez)$/i.test(t));
+        district = tokens.length > 0 ? tokens[tokens.length - 1] : null;
+      }
+      return { city, district };
+    }
+
     if (locText.includes('/')) {
       const parts = locText.split('/').map((s) => s.trim());
       return { city: parts[0] ?? null, district: parts[1] ?? null };
     }
 
-    // Fallback: breadcrumb might have city
     const breadcrumbs = Array.from(document.querySelectorAll('[class*="breadcrumb"] a, nav.breadcrumb a'));
     const cityBreadcrumb = breadcrumbs.find((el) => {
       const href = el.getAttribute('href') ?? '';
@@ -496,74 +536,63 @@ export async function parseDetailPage(page: Page): Promise<DetailData> {
   const make =
     gtm['brand'] ??
     collectIdentity.brand ??
-    specs['Marka'] ??
-    specs['Araç Markası'] ??
+    getSpec(specs, 'Marka', 'Araç Markası') ??
     gtm['marka'] ??
     null;
   const model =
     gtm['model'] ??
     collectIdentity.serial ??
-    specs['Seri'] ??
-    specs['Araç Modeli'] ??
-    specs['Model'] ??
+    getSpec(specs, 'Seri', 'Araç Modeli', 'Model') ??
     null;
   const variant = deriveVariant(
     [
-      specs['Versiyon'],
-      specs['Paket'],
+      getSpec(specs, 'Versiyon'),
+      getSpec(specs, 'Paket'),
       collectIdentity.model,
       gtm['modelGroup'],
-      specs['Model'],
+      getSpec(specs, 'Model'),
     ],
     make,
     model,
   );
 
-  const yearRaw = specs['Yıl'] ?? specs['Model Yılı'] ?? gtm['year'] ?? null;
+  const yearRaw = getSpec(specs, 'Yıl', 'Model Yılı') ?? gtm['year'] ?? null;
   const year = yearRaw ? parseModelYear(yearRaw) : null;
 
   // Specs
-  const kmRaw = specs['Kilometre'] ?? specs['km'] ?? gtm['km'] ?? null;
+  const kmRaw = getSpec(specs, 'Kilometre', 'km') ?? gtm['km'] ?? null;
   const mileage = kmRaw ? parseMileage(kmRaw) : null;
 
-  const fuelRaw = specs['Yakıt Tipi'] ?? specs['Yakıt'] ?? gtm['fuel'] ?? null;
+  const fuelRaw = getSpec(specs, 'Yakıt Tipi', 'Yakıt') ?? gtm['fuel'] ?? null;
   const fuelType = fuelRaw ? normalizeFuelType(fuelRaw) : null;
 
-  const gearRaw = specs['Vites Tipi'] ?? specs['Vites'] ?? gtm['gear'] ?? null;
+  const gearRaw = getSpec(specs, 'Vites Tipi', 'Vites') ?? gtm['gear'] ?? null;
   const transmission = gearRaw ? normalizeTransmission(gearRaw) : null;
 
-  const engineRaw = specs['Motor Hacmi'] ?? specs['Motor'] ?? specs['cc'] ?? null;
+  const engineRaw = getSpec(specs, 'Motor Hacmi', 'Motor', 'cc');
   const engineSize = engineRaw ? parseEngineSize(engineRaw) : null;
 
-  const hpRaw = specs['Motor Gücü'] ?? specs['Beygir Gücü'] ?? null;
-  const horsePower = hpRaw ? parseInt(hpRaw.replace(/\D/g, ''), 10) || null : null;
+  const hpRaw = getSpec(specs, 'Motor Gücü', 'Beygir Gücü');
+  const horsePower = parseHorsePower(hpRaw);
 
-  const color = specs['Renk'] ?? specs['Dış Renk'] ?? gtm['color'] ?? null;
+  const color = getSpec(specs, 'Renk', 'Dış Renk') ?? gtm['color'] ?? null;
 
-  const bodyRaw = specs['Kasa Tipi'] ?? specs['Kasa'] ?? gtm['bodyType'] ?? null;
+  const bodyRaw = getSpec(specs, 'Kasa Tipi', 'Kasa') ?? gtm['bodyType'] ?? null;
   const bodyType = bodyRaw ? normalizeBodyType(bodyRaw) : null;
 
-  const drivetrain = specs['Çekiş'] ?? null;
+  const drivetrain = getSpec(specs, 'Çekiş');
 
-  const doorsRaw = specs['Kapı Sayısı'] ?? null;
+  const doorsRaw = getSpec(specs, 'Kapı Sayısı');
   const doors = doorsRaw ? parseInt(doorsRaw.replace(/\D/g, ''), 10) || null : null;
 
-  // Paint condition
-  const paintRaw =
-    specs['Boya-Değişen'] ??
-    specs['Boya Değişen'] ??
-    specs['Boya Durumu'] ??
-    specs['Boyalı'] ??
-    null;
+  // Paint condition — arabam uses lowercase ğ in "Boya-değişen"
+  const paintRaw = getSpec(specs, 'Boya-değişen', 'Boya Değişen', 'Boya Durumu', 'Boyalı');
   const paintCondition = paintRaw ? parsePaintCondition(paintRaw) : null;
 
-  // Accident history
-  const accidentRaw =
-    specs['Ağır Hasar Kaydı'] ??
-    specs['Hasar Kaydı'] ??
-    specs['Kaza Kaydı'] ??
-    damageReport;
-  const accidentHistory = accidentRaw ?? null;
+  // Accident history — boolean-ish field from "Ağır Hasarlı" spec.
+  // damageReport holds the tramer text (separate field).
+  const accidentHistory =
+    getSpec(specs, 'Ağır Hasarlı', 'Ağır Hasar Kaydı', 'Hasar Kaydı', 'Kaza Kaydı') ?? null;
 
   // City fallback: GTM has city if DOM location not found
   const city = location.city ?? gtm['city'] ?? null;
@@ -577,14 +606,12 @@ export async function parseDetailPage(page: Page): Promise<DetailData> {
     else if (pageTitle.includes('sahibinden')) sellerType = 'sahibinden';
   }
 
-  // Listing date normalization (arabam shows "12 Ocak 2024" etc.)
-  let listingDate: string | null = misc.listingDate;
+  // Listing date — prefer specs table "İlan Tarihi" over DOM scrape.
+  const listingDateRaw = getSpec(specs, 'İlan Tarihi', 'Tarih') ?? misc.listingDate;
+  let listingDate: string | null = listingDateRaw;
   if (listingDate) {
-    try {
-      listingDate = normalizeTurkishDate(listingDate);
-    } catch {
-      // keep raw if we can't parse
-    }
+    const normalized = normalizeTurkishDate(listingDate);
+    if (normalized) listingDate = normalized;
   }
 
   return {

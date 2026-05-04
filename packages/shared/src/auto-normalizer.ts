@@ -93,7 +93,14 @@ export function parseEngineSize(text: string | null | undefined): number | null 
 
   const clean = text.trim().toLowerCase();
 
-  const ccMatch = clean.match(/^(\d+)\s*cc/);
+  const rangeMatch = clean.match(/^(\d+)\s*[-–]\s*(\d+)\s*(?:cc|cm3|cm\^3)?/);
+  if (rangeMatch) {
+    const lo = parseInt(rangeMatch[1], 10);
+    const hi = parseInt(rangeMatch[2], 10);
+    return Math.round((lo + hi) / 2);
+  }
+
+  const ccMatch = clean.match(/^(\d+)\s*(?:cc|cm3|cm\^3)/);
   if (ccMatch) return parseInt(ccMatch[1], 10);
 
   const litreCommaMatch = clean.match(/^(\d+),(\d+)\s*[lL]/);
@@ -221,6 +228,21 @@ export function vehicleFingerprint(
   ].join('-');
 }
 
+export function parseHorsePower(text: string | null | undefined): number | null {
+  if (!text) return null;
+  const clean = text.trim().toLowerCase();
+
+  const rangeMatch = clean.match(/(\d+)\s*[-–]\s*(\d+)/);
+  if (rangeMatch) {
+    const lo = parseInt(rangeMatch[1], 10);
+    const hi = parseInt(rangeMatch[2], 10);
+    return Math.round((lo + hi) / 2);
+  }
+
+  const singleMatch = clean.match(/(\d+)/);
+  return singleMatch ? parseInt(singleMatch[1], 10) : null;
+}
+
 export function parsePaintCondition(text: string | null | undefined): PaintConditionResult {
   const originalText = text ?? '';
   const trimmed = originalText.trim();
@@ -247,32 +269,26 @@ export function parsePaintCondition(text: string | null | undefined): PaintCondi
     }
   }
 
-  const boyaVeDegisen = normalized.match(/(\d+)\s*boya\s+(\d+)\s*degisen/);
-  if (boyaVeDegisen) {
-    return {
-      originalText,
-      paintedPanels: parseInt(boyaVeDegisen[1], 10),
-      replacedPanels: parseInt(boyaVeDegisen[2], 10),
-      isOriginal: false,
-    };
+  // Sum every "<n> boya/boyali/lokal boyali" occurrence (count lokal as half-painted = +1).
+  let paintedPanels = 0;
+  const boyaliPattern = /(\d+)\s*(?:lokal\s+)?boya(?:li)?/g;
+  let boyaliMatch: RegExpExecArray | null;
+  while ((boyaliMatch = boyaliPattern.exec(normalized)) !== null) {
+    paintedPanels += parseInt(boyaliMatch[1], 10);
   }
 
-  const boyaliMatch = normalized.match(/(\d+)\s*boya(?:li)?(?!\s+\d)/);
-  if (boyaliMatch) {
-    return {
-      originalText,
-      paintedPanels: parseInt(boyaliMatch[1], 10),
-      replacedPanels: 0,
-      isOriginal: false,
-    };
+  let replacedPanels = 0;
+  const degisenPattern = /(\d+)\s*degisen/g;
+  let degisenMatch: RegExpExecArray | null;
+  while ((degisenMatch = degisenPattern.exec(normalized)) !== null) {
+    replacedPanels += parseInt(degisenMatch[1], 10);
   }
 
-  const degisenMatch = normalized.match(/(\d+)\s*degisen/);
-  if (degisenMatch) {
+  if (paintedPanels > 0 || replacedPanels > 0) {
     return {
       originalText,
-      paintedPanels: 0,
-      replacedPanels: parseInt(degisenMatch[1], 10),
+      paintedPanels,
+      replacedPanels,
       isOriginal: false,
     };
   }
