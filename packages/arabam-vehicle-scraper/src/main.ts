@@ -304,10 +304,11 @@ try {
       async ({ page, request }) => {
         const isDetailPage = request.url.includes('/ilan/');
 
-        // Shorter delays — enough to avoid rate limits but not blowing the run budget
+        // Minimal jitter — stealth + fingerprint rotation already handle anti-bot.
+        // Detail pages are already gated by the specs-selector wait inside the handler.
         const delay = isDetailPage
-          ? 300 + Math.floor(Math.random() * 400)
-          : 500 + Math.floor(Math.random() * 500);
+          ? 100 + Math.floor(Math.random() * 150)
+          : 250 + Math.floor(Math.random() * 250);
         await page.waitForTimeout(delay);
       },
     ],

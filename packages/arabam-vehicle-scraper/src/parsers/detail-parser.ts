@@ -11,6 +11,10 @@
  * Price:     .product-price-wrapper → .desktop-information-price
  * Desc:      #tab-description .tab-content-wrapper
  * GTM:       googletag.pubads().setTargeting(...) — reliable structured data fallback
+ *
+ * Performance: a single page.evaluate() pulls everything (specs/images/seller/location/
+ * misc/damageReport + filtered <script> texts). Avoids page.content() DOM serialization
+ * and collapses what used to be 7 CDP round-trips down to 1.
  */
 
 import type { Page } from 'playwright';
@@ -75,22 +79,21 @@ export interface DetailData {
   specifications: Record<string, string>;
 }
 
-// ─── GTM targeting data extraction ───────────────────────────────────────────
-
-/**
- * arabam.com embeds structured data via Google Tag Manager's setTargeting calls.
- * This is the most reliable source for make, model, year, city, fuel, transmission.
- *
- * Pattern: googletag.pubads().setTargeting('key', 'value');
- */
-function extractGtmTargeting(html: string): Record<string, string> {
-  const targeting: Record<string, string> = {};
-  const pattern = /setTargeting\(['"]([^'"]+)['"]\s*,\s*['"]([^'"]*)['"]\)/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(html)) !== null) {
-    targeting[match[1]] = match[2];
-  }
-  return targeting;
+interface RawPageData {
+  scripts: string[];
+  specs: Record<string, string>;
+  imageUrls: string[];
+  seller: { name: string | null; memberType: string; phone: string | null };
+  location: { city: string | null; district: string | null; rawText: string };
+  misc: {
+    title: string | null;
+    priceText: string | null;
+    negotiable: boolean;
+    swapAvailable: boolean;
+    description: string | null;
+    listingDateText: string | null;
+  };
+  damageReport: string | null;
 }
 
 interface CollectDataIdentity {
@@ -99,75 +102,294 @@ interface CollectDataIdentity {
   serial: string | null;
 }
 
-function extractCollectDataIdentity(html: string): CollectDataIdentity {
-  const marker = 'var collectDataObject = ';
-  const markerIndex = html.indexOf(marker);
-  if (markerIndex === -1) {
-    return { brand: null, model: null, serial: null };
-  }
+// ─── Single-evaluate page extraction ──────────────────────────────────────────
 
-  try {
-    let start = markerIndex + marker.length;
-    while (start < html.length && /\s/.test(html[start])) start++;
-    if (html[start] !== '{') {
-      return { brand: null, model: null, serial: null };
+/**
+ * One CDP round-trip pulls every DOM-derived field plus the few script texts we
+ * need to scan in Node. This is significantly cheaper than page.content() + N
+ * separate evaluates, especially when the container is CPU-bound.
+ */
+async function extractAllPageData(page: Page): Promise<RawPageData> {
+  return page.evaluate((): RawPageData => {
+    const norm = (value: string | null | undefined): string =>
+      (value ?? '').replace(/\s+/g, ' ').trim();
+
+    const cleanValue = (value: string | null | undefined): string =>
+      (value ?? '')
+        .replace(/Kopyala(?:ndı|n)?/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    // ── Script texts (only those we'll parse: GTM + collectData) ────────────
+    const scripts: string[] = [];
+    document.querySelectorAll('script').forEach((s) => {
+      const t = s.textContent ?? '';
+      if (!t) return;
+      if (t.includes('setTargeting(') || t.includes('collectDataObject')) {
+        scripts.push(t);
+      }
+    });
+
+    // ── Specs table ─────────────────────────────────────────────────────────
+    const specs: Record<string, string> = {};
+    document.querySelectorAll('.property-item').forEach((item) => {
+      const keyRaw =
+        item.querySelector('.property-key')?.textContent ??
+        item.querySelector('dt')?.textContent ??
+        '';
+      const valueRaw =
+        item.querySelector('.property-value')?.textContent ??
+        item.querySelector('dd')?.textContent ??
+        '';
+      const key = norm(keyRaw);
+      const value = cleanValue(valueRaw);
+      if (key && value) specs[key] = value;
+    });
+    if (Object.keys(specs).length === 0) {
+      document.querySelectorAll('table.properties tr').forEach((row) => {
+        const cells = row.querySelectorAll('td, th');
+        if (cells.length >= 2) {
+          const key = norm(cells[0].textContent);
+          const value = cleanValue(cells[1].textContent);
+          if (key && value) specs[key] = value;
+        }
+      });
     }
 
-    let depth = 0;
-    let quoteChar: '"' | "'" | null = null;
-    let escaped = false;
-    let end = start;
-
-    for (; end < html.length; end++) {
-      const ch = html[end];
-
-      if (quoteChar) {
-        if (escaped) {
-          escaped = false;
-          continue;
-        }
-        if (ch === '\\') {
-          escaped = true;
-          continue;
-        }
-        if (ch === quoteChar) {
-          quoteChar = null;
-        }
-        continue;
+    // ── Images (Swiper gallery → arbstorage.mncdn.com) ───────────────────────
+    const seenImg = new Set<string>();
+    const imageUrls: string[] = [];
+    const imgSelectors =
+      '.swiper-slide img, .slider-container img, .gallery img, [class*="gallery"] img';
+    document.querySelectorAll<HTMLImageElement>(imgSelectors).forEach((img) => {
+      const src =
+        img.getAttribute('data-src') ??
+        img.getAttribute('data-lazy') ??
+        img.src ??
+        '';
+      if (!src || !src.includes('arbstorage')) return;
+      const fullSize = src.replace(/_\d+x\d+\./, '_1920x1080.');
+      if (!seenImg.has(fullSize)) {
+        seenImg.add(fullSize);
+        imageUrls.push(fullSize);
       }
+    });
 
-      if (ch === '"' || ch === '\'') {
-        quoteChar = ch;
-        continue;
-      }
+    // ── Seller ───────────────────────────────────────────────────────────────
+    const sellerContainer =
+      document.querySelector('.advert-owner-container') ??
+      document.querySelector('[class*="advert-owner"]') ??
+      document.querySelector('[class*="seller"]');
 
-      if (ch === '{') {
-        depth++;
-        continue;
-      }
-
-      if (ch === '}') {
-        depth--;
-        if (depth === 0) break;
-      }
+    let sellerName: string | null = null;
+    let sellerMemberType = '';
+    let sellerPhone: string | null = null;
+    if (sellerContainer) {
+      sellerName =
+        norm(sellerContainer.querySelector('.advert-owner-name')?.textContent) ||
+        norm(sellerContainer.querySelector('[class*="owner-name"]')?.textContent) ||
+        null;
+      sellerMemberType = (
+        norm(sellerContainer.querySelector('.advert-owner-memberType')?.textContent) ||
+        norm(sellerContainer.querySelector('.advert-owner-badge')?.textContent) ||
+        ''
+      ).toLowerCase();
+      const phoneEl =
+        sellerContainer.querySelector('a[href^="tel:"]') ??
+        document.querySelector('a[href^="tel:"]');
+      sellerPhone =
+        phoneEl?.getAttribute('href')?.replace('tel:', '').trim() || null;
     }
 
-    const objectLiteral = html.slice(start, end + 1);
-    const parsed = JSON.parse(objectLiteral) as {
-      Brand?: string;
-      Model?: string;
-      Serial?: string;
-    };
+    // ── Location ─────────────────────────────────────────────────────────────
+    const locEl =
+      document.querySelector('.product-location') ??
+      document.querySelector('[class*="product-location"]') ??
+      document.querySelector('[class*="location-info"]');
+    const locText = norm(locEl?.textContent);
+
+    let locCity: string | null = null;
+    let locDistrict: string | null = null;
+    if (locText.includes(',')) {
+      const parts = locText.split(',').map((s) => s.trim()).filter(Boolean);
+      locCity = parts[parts.length - 1] ?? null;
+      const districtPart = parts[parts.length - 2] ?? null;
+      if (districtPart) {
+        const tokens = districtPart
+          .split(/\s+/)
+          .filter((t) => !/^(Mh\.?|Mahallesi|Merkez)$/i.test(t));
+        locDistrict = tokens.length > 0 ? tokens[tokens.length - 1] : null;
+      }
+    } else if (locText.includes('/')) {
+      const parts = locText.split('/').map((s) => s.trim());
+      locCity = parts[0] ?? null;
+      locDistrict = parts[1] ?? null;
+    } else if (locText) {
+      const breadcrumb = Array.from(
+        document.querySelectorAll('[class*="breadcrumb"] a, nav.breadcrumb a'),
+      ).find((el) => {
+        const href = el.getAttribute('href') ?? '';
+        return href.includes('/il/') || href.includes('/sehir/');
+      });
+      locCity = norm(breadcrumb?.textContent) || locText;
+    }
+
+    // ── Misc fields (title/price/flags/desc/date) ────────────────────────────
+    const title =
+      norm(
+        document.querySelector(
+          'h1.product-title, h1[class*="title"], .product-detail h1',
+        )?.textContent,
+      ) || null;
+
+    const priceEl =
+      document.querySelector(
+        '.desktop-information-price, .product-price-wrapper .price, [class*="product-price"] strong',
+      ) ?? document.querySelector('[class*="price-value"], [class*="fiyat"]');
+    const priceText = norm(priceEl?.textContent) || null;
+
+    const fullText = document.body?.textContent ?? '';
+    const negotiable =
+      fullText.includes('Pazarlık') ||
+      fullText.includes('pazarlık') ||
+      fullText.includes('Fiyatı Müzakere');
+    const swapAvailable =
+      fullText.includes('Takasa Uygun') ||
+      fullText.includes('takasa uygun') ||
+      !!document.querySelector('[class*="takas"]');
+
+    const descEl =
+      document.querySelector('#tab-description .tab-content-wrapper') ??
+      document.querySelector('#tab-description') ??
+      document.querySelector('[class*="description-content"]');
+    const description = norm(descEl?.textContent) || null;
+
+    const dateEl = document.querySelector(
+      '.listing-date, [class*="ilan-tarihi"], [class*="listing-date"]',
+    );
+    const listingDateText = norm(dateEl?.textContent) || null;
+
+    // ── Damage / tramer report ───────────────────────────────────────────────
+    let damageReport: string | null = null;
+    const tramSection =
+      document.querySelector('[class*="tramer"]') ??
+      document.querySelector('[class*="hasar"]') ??
+      document.querySelector('[class*="accident"]');
+    if (tramSection) {
+      damageReport = norm(tramSection.textContent) || null;
+    } else {
+      const items = document.querySelectorAll('.property-item');
+      for (const item of Array.from(items)) {
+        const k = (item.querySelector('.property-key')?.textContent ?? '')
+          .toLowerCase()
+          .trim();
+        if (k.includes('tramer') || k.includes('hasar')) {
+          damageReport =
+            norm(item.querySelector('.property-value')?.textContent) || null;
+          break;
+        }
+      }
+    }
 
     return {
-      brand: parsed.Brand ?? null,
-      model: parsed.Model ?? null,
-      serial: parsed.Serial ?? null,
+      scripts,
+      specs,
+      imageUrls,
+      seller: { name: sellerName, memberType: sellerMemberType, phone: sellerPhone },
+      location: { city: locCity, district: locDistrict, rawText: locText },
+      misc: { title, priceText, negotiable, swapAvailable, description, listingDateText },
+      damageReport,
     };
-  } catch (err) {
-    log.debug(`extractCollectDataIdentity parse error: ${err}`);
-    return { brand: null, model: null, serial: null };
+  });
+}
+
+// ─── Script-text parsers (run in Node on returned script bodies) ─────────────
+
+/**
+ * arabam.com embeds structured data via Google Tag Manager's setTargeting calls.
+ * Pattern: googletag.pubads().setTargeting('key', 'value');
+ */
+function extractGtmTargeting(scripts: string[]): Record<string, string> {
+  const targeting: Record<string, string> = {};
+  const pattern = /setTargeting\(['"]([^'"]+)['"]\s*,\s*['"]([^'"]*)['"]\)/g;
+  for (const script of scripts) {
+    if (!script.includes('setTargeting(')) continue;
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(script)) !== null) {
+      targeting[match[1]] = match[2];
+    }
   }
+  return targeting;
+}
+
+function extractCollectDataIdentity(scripts: string[]): CollectDataIdentity {
+  const marker = 'var collectDataObject = ';
+  for (const script of scripts) {
+    const markerIndex = script.indexOf(marker);
+    if (markerIndex === -1) continue;
+
+    try {
+      let start = markerIndex + marker.length;
+      while (start < script.length && /\s/.test(script[start])) start++;
+      if (script[start] !== '{') continue;
+
+      let depth = 0;
+      let quoteChar: '"' | "'" | null = null;
+      let escaped = false;
+      let end = start;
+
+      for (; end < script.length; end++) {
+        const ch = script[end];
+
+        if (quoteChar) {
+          if (escaped) {
+            escaped = false;
+            continue;
+          }
+          if (ch === '\\') {
+            escaped = true;
+            continue;
+          }
+          if (ch === quoteChar) {
+            quoteChar = null;
+          }
+          continue;
+        }
+
+        if (ch === '"' || ch === '\'') {
+          quoteChar = ch;
+          continue;
+        }
+
+        if (ch === '{') {
+          depth++;
+          continue;
+        }
+
+        if (ch === '}') {
+          depth--;
+          if (depth === 0) break;
+        }
+      }
+
+      const objectLiteral = script.slice(start, end + 1);
+      const parsed = JSON.parse(objectLiteral) as {
+        Brand?: string;
+        Model?: string;
+        Serial?: string;
+      };
+
+      return {
+        brand: parsed.Brand ?? null,
+        model: parsed.Model ?? null,
+        serial: parsed.Serial ?? null,
+      };
+    } catch (err) {
+      log.debug(`extractCollectDataIdentity parse error: ${err}`);
+    }
+  }
+  return { brand: null, model: null, serial: null };
 }
 
 function deriveVariant(
@@ -198,61 +420,6 @@ function deriveVariant(
   return null;
 }
 
-// ─── Specs table extraction ───────────────────────────────────────────────────
-
-/**
- * Extracts all key-value pairs from the vehicle specs table.
- * Returns a flat Record<string, string> with original Turkish keys.
- *
- * DOM structure:
- *   .property-item
- *     .property-key (e.g. "Yakıt Tipi")
- *     .property-value (e.g. "Benzin")
- */
-async function extractSpecsTable(page: Page): Promise<Record<string, string>> {
-  return page.evaluate((): Record<string, string> => {
-    const specs: Record<string, string> = {};
-
-    const cleanValue = (raw: string): string => {
-      // Drop "Kopyalandı" tooltip and similar "Kopya..." UI text, collapse whitespace.
-      return raw
-        .replace(/Kopyala(?:ndı|n)?/gi, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-    };
-
-    // Primary: .property-item containers
-    const items = document.querySelectorAll('.property-item');
-    items.forEach((item) => {
-      const keyRaw =
-        item.querySelector('.property-key')?.textContent?.trim() ??
-        item.querySelector('dt')?.textContent?.trim() ??
-        '';
-      const valueRaw =
-        item.querySelector('.property-value')?.textContent ??
-        item.querySelector('dd')?.textContent ??
-        '';
-      const key = keyRaw.replace(/\s+/g, ' ').trim();
-      const value = cleanValue(valueRaw);
-      if (key && value) specs[key] = value;
-    });
-
-    // Fallback: definition list or table rows if .property-item not found
-    if (Object.keys(specs).length === 0) {
-      document.querySelectorAll('table.properties tr').forEach((row) => {
-        const cells = row.querySelectorAll('td, th');
-        if (cells.length >= 2) {
-          const key = (cells[0].textContent ?? '').replace(/\s+/g, ' ').trim();
-          const value = cleanValue(cells[1].textContent ?? '');
-          if (key && value) specs[key] = value;
-        }
-      });
-    }
-
-    return specs;
-  });
-}
-
 /** Case-insensitive spec lookup — handles "Boya-değişen" vs "Boya-Değişen" mismatches. */
 function getSpec(specs: Record<string, string>, ...keys: string[]): string | null {
   const lowerMap = new Map<string, string>();
@@ -266,269 +433,34 @@ function getSpec(specs: Record<string, string>, ...keys: string[]): string | nul
   return null;
 }
 
-// ─── Image extraction ─────────────────────────────────────────────────────────
-
-/**
- * Extract all full-size image URLs from the Swiper gallery.
- * arabam hosts images at arbstorage.mncdn.com/ilanfotograflari/...
- *
- * Strategy:
- * 1. Get all .swiper-slide img[src] that point to arbstorage.mncdn.com
- * 2. Filter out duplicates (Swiper clones slides)
- * 3. Replace thumbnail size suffix with the 1920x1080 version
- */
-async function extractImageUrls(page: Page): Promise<string[]> {
-  return page.evaluate((): string[] => {
-    const seen = new Set<string>();
-    const urls: string[] = [];
-
-    // Primary gallery
-    const imgs = document.querySelectorAll(
-      '.swiper-slide img, .slider-container img, .gallery img, [class*="gallery"] img',
-    ) as NodeListOf<HTMLImageElement>;
-
-    imgs.forEach((img) => {
-      const src =
-        img.getAttribute('data-src') ??
-        img.getAttribute('data-lazy') ??
-        img.src ??
-        '';
-      if (!src || !src.includes('arbstorage') || seen.has(src)) return;
-      // Normalize to full size: replace any size suffix (e.g. _800x600) with _1920x1080
-      const fullSize = src.replace(/_\d+x\d+\./, '_1920x1080.');
-      if (!seen.has(fullSize)) {
-        seen.add(fullSize);
-        urls.push(fullSize);
-      }
-    });
-
-    // Fallback: look for image URLs in script tags (JSON-LD or insiderArray)
-    if (urls.length === 0) {
-      const scripts = document.querySelectorAll('script');
-      scripts.forEach((script) => {
-        const text = script.textContent ?? '';
-        const matches = text.matchAll(/["'](https:\/\/arbstorage\.mncdn\.com\/[^"']+)["']/g);
-        for (const m of matches) {
-          const url = m[1].replace(/_\d+x\d+\./, '_1920x1080.');
-          if (!seen.has(url)) {
-            seen.add(url);
-            urls.push(url);
-          }
-        }
-      });
-    }
-
-    return urls;
-  });
-}
-
-// ─── Seller extraction ────────────────────────────────────────────────────────
-
-interface SellerInfo {
-  name: string | null;
-  type: 'galeri' | 'sahibinden' | 'yetkili_bayi' | null;
-  phone: string | null;
-}
-
-async function extractSeller(page: Page): Promise<SellerInfo> {
-  return page.evaluate((): SellerInfo => {
-    const container =
-      document.querySelector('.advert-owner-container') ??
-      document.querySelector('[class*="advert-owner"]') ??
-      document.querySelector('[class*="seller"]');
-
-    if (!container) return { name: null, type: null, phone: null };
-
-    const name =
-      container.querySelector('.advert-owner-name')?.textContent?.trim() ??
-      container.querySelector('[class*="owner-name"]')?.textContent?.trim() ??
-      null;
-
-    const memberTypeText =
-      container.querySelector('.advert-owner-memberType')?.textContent?.trim()?.toLowerCase() ??
-      container.querySelector('.advert-owner-badge')?.textContent?.trim()?.toLowerCase() ??
-      '';
-
-    let type: 'galeri' | 'sahibinden' | 'yetkili_bayi' | null = null;
-    if (memberTypeText.includes('yetkili') || memberTypeText.includes('bayi')) {
-      type = 'yetkili_bayi';
-    } else if (memberTypeText.includes('galeri') || memberTypeText.includes('galeriden')) {
-      type = 'galeri';
-    } else if (
-      memberTypeText.includes('sahibinden') ||
-      memberTypeText.includes('bireysel') ||
-      memberTypeText.includes('özel')
-    ) {
-      type = 'sahibinden';
-    }
-
-    // Phone: may be in a tel: link or masked (shown after click in real site)
-    const phoneEl =
-      container.querySelector('a[href^="tel:"]') ??
-      document.querySelector('a[href^="tel:"]');
-    const phone = phoneEl?.getAttribute('href')?.replace('tel:', '').trim() ?? null;
-
-    return { name, type, phone };
-  });
-}
-
-// ─── Location extraction ──────────────────────────────────────────────────────
-
-interface LocationInfo {
-  city: string | null;
-  district: string | null;
-}
-
-async function extractLocation(page: Page): Promise<LocationInfo> {
-  return page.evaluate((): LocationInfo => {
-    const locEl =
-      document.querySelector('.product-location') ??
-      document.querySelector('[class*="product-location"]') ??
-      document.querySelector('[class*="location-info"]');
-
-    const locText = (locEl?.textContent ?? '').replace(/\s+/g, ' ').trim();
-
-    // arabam common forms:
-    //   "Karacaahmet Mh. Şehitkamil, Gaziantep"   → district=Şehitkamil, city=Gaziantep
-    //   "Merkez Torbalı, İzmir"                    → district=Torbalı, city=İzmir
-    //   "İstanbul / Kadıköy"                       → city=İstanbul, district=Kadıköy
-    //   "İstanbul"                                 → city=İstanbul
-
-    if (locText.includes(',')) {
-      const parts = locText.split(',').map((s) => s.trim()).filter(Boolean);
-      const city = parts[parts.length - 1] ?? null;
-      const districtPart = parts[parts.length - 2] ?? null;
-      // Strip leading neighborhood (e.g. "Mh." abbreviation) — keep last word as district.
-      let district: string | null = null;
-      if (districtPart) {
-        const tokens = districtPart.split(/\s+/).filter((t) => !/^(Mh\.?|Mahallesi|Merkez)$/i.test(t));
-        district = tokens.length > 0 ? tokens[tokens.length - 1] : null;
-      }
-      return { city, district };
-    }
-
-    if (locText.includes('/')) {
-      const parts = locText.split('/').map((s) => s.trim());
-      return { city: parts[0] ?? null, district: parts[1] ?? null };
-    }
-
-    const breadcrumbs = Array.from(document.querySelectorAll('[class*="breadcrumb"] a, nav.breadcrumb a'));
-    const cityBreadcrumb = breadcrumbs.find((el) => {
-      const href = el.getAttribute('href') ?? '';
-      return href.includes('/il/') || href.includes('/sehir/');
-    });
-
-    if (cityBreadcrumb) {
-      return { city: cityBreadcrumb.textContent?.trim() ?? null, district: null };
-    }
-
-    return { city: locText || null, district: null };
-  });
-}
-
-// ─── Misc field extraction ────────────────────────────────────────────────────
-
-async function extractMiscFields(page: Page): Promise<{
-  title: string | null;
-  price: { amount: number; currency: 'TRY' } | null;
-  negotiable: boolean;
-  swapAvailable: boolean;
-  description: string | null;
-  listingDate: string | null;
-}> {
-  return page.evaluate(() => {
-    // Title
-    const title =
-      document.querySelector('h1.product-title, h1[class*="title"], .product-detail h1')
-        ?.textContent?.trim() ?? null;
-
-    // Price
-    const priceEl =
-      document.querySelector('.desktop-information-price, .product-price-wrapper .price, [class*="product-price"] strong') ??
-      document.querySelector('[class*="price-value"], [class*="fiyat"]');
-    const priceText = priceEl?.textContent?.trim() ?? null;
-
-    // Negotiable: "Pazarlık Payı Var" / "Fiyatı Müzakere Et"
-    const fullText = document.body.textContent ?? '';
-    const negotiable =
-      fullText.includes('Pazarlık') ||
-      fullText.includes('pazarlık') ||
-      fullText.includes('Fiyatı Müzakere');
-
-    // Swap
-    const swapAvailable =
-      fullText.includes('Takasa Uygun') ||
-      fullText.includes('takasa uygun') ||
-      !!document.querySelector('[class*="takas"]');
-
-    // Description
-    const descEl =
-      document.querySelector('#tab-description .tab-content-wrapper') ??
-      document.querySelector('#tab-description') ??
-      document.querySelector('[class*="description-content"]');
-    const description = descEl?.textContent?.trim() ?? null;
-
-    // Listing date
-    const dateEl =
-      document.querySelector('.listing-date, [class*="ilan-tarihi"], [class*="listing-date"]');
-    const listingDate = dateEl?.textContent?.trim() ?? null;
-
-    return { title, priceText, negotiable, swapAvailable, description, listingDate };
-  }).then(({ title, priceText, negotiable, swapAvailable, description, listingDate }) => ({
-    title,
-    price: parsePrice(priceText),
-    negotiable,
-    swapAvailable,
-    description,
-    listingDate,
-  }));
-}
-
-// ─── Accent/tramer report ─────────────────────────────────────────────────────
-
-async function extractDamageReport(page: Page): Promise<string | null> {
-  return page.evaluate((): string | null => {
-    // Tramer section might be in specs table or dedicated section
-    const tramSection =
-      document.querySelector('[class*="tramer"]') ??
-      document.querySelector('[class*="hasar"]') ??
-      document.querySelector('[class*="accident"]');
-
-    if (tramSection) return tramSection.textContent?.trim() ?? null;
-
-    // Look for "Tramer" keyword in specs
-    const propertyItems = document.querySelectorAll('.property-item');
-    for (const item of propertyItems) {
-      const key = item.querySelector('.property-key')?.textContent?.trim()?.toLowerCase() ?? '';
-      if (key.includes('tramer') || key.includes('hasar')) {
-        return item.querySelector('.property-value')?.textContent?.trim() ?? null;
-      }
-    }
-
-    return null;
-  });
+function sellerTypeFromMember(
+  memberType: string,
+): 'galeri' | 'sahibinden' | 'yetkili_bayi' | null {
+  if (!memberType) return null;
+  if (memberType.includes('yetkili') || memberType.includes('bayi')) return 'yetkili_bayi';
+  if (memberType.includes('galeri') || memberType.includes('galeriden')) return 'galeri';
+  if (
+    memberType.includes('sahibinden') ||
+    memberType.includes('bireysel') ||
+    memberType.includes('özel')
+  ) {
+    return 'sahibinden';
+  }
+  return null;
 }
 
 // ─── Main parse function ──────────────────────────────────────────────────────
 
 /**
  * Full extraction from a rendered arabam.com detail page.
- * Combines DOM extraction with GTM targeting data for maximum reliability.
+ * One CDP round-trip pulls everything; remaining work is pure CPU in Node.
  */
 export async function parseDetailPage(page: Page): Promise<DetailData> {
-  const html = await page.content();
-  const gtm = extractGtmTargeting(html);
-  const collectIdentity = extractCollectDataIdentity(html);
+  const raw = await extractAllPageData(page);
 
-  // Run parallel extractions
-  const [specs, images, seller, location, misc, damageReport] = await Promise.all([
-    extractSpecsTable(page),
-    extractImageUrls(page),
-    extractSeller(page),
-    extractLocation(page),
-    extractMiscFields(page),
-    extractDamageReport(page),
-  ]);
+  const gtm = extractGtmTargeting(raw.scripts);
+  const collectIdentity = extractCollectDataIdentity(raw.scripts);
+  const { specs, imageUrls, seller, location, misc, damageReport } = raw;
 
   // ── Resolve fields with fallback chain: specs table → GTM → URL slug ──────
 
@@ -590,7 +522,6 @@ export async function parseDetailPage(page: Page): Promise<DetailData> {
   const paintCondition = paintRaw ? parsePaintCondition(paintRaw) : null;
 
   // Accident history — boolean-ish field from "Ağır Hasarlı" spec.
-  // damageReport holds the tramer text (separate field).
   const accidentHistory =
     getSpec(specs, 'Ağır Hasarlı', 'Ağır Hasar Kaydı', 'Hasar Kaydı', 'Kaza Kaydı') ?? null;
 
@@ -598,7 +529,7 @@ export async function parseDetailPage(page: Page): Promise<DetailData> {
   const city = location.city ?? gtm['city'] ?? null;
 
   // Seller type fallback from title/page text
-  let sellerType = seller.type;
+  let sellerType = sellerTypeFromMember(seller.memberType);
   if (!sellerType) {
     const pageTitle = (misc.title ?? '').toLowerCase();
     if (pageTitle.includes('yetkili') || pageTitle.includes('bayi')) sellerType = 'yetkili_bayi';
@@ -607,7 +538,7 @@ export async function parseDetailPage(page: Page): Promise<DetailData> {
   }
 
   // Listing date — prefer specs table "İlan Tarihi" over DOM scrape.
-  const listingDateRaw = getSpec(specs, 'İlan Tarihi', 'Tarih') ?? misc.listingDate;
+  const listingDateRaw = getSpec(specs, 'İlan Tarihi', 'Tarih') ?? misc.listingDateText;
   let listingDate: string | null = listingDateRaw;
   if (listingDate) {
     const normalized = normalizeTurkishDate(listingDate);
@@ -629,18 +560,18 @@ export async function parseDetailPage(page: Page): Promise<DetailData> {
     bodyType,
     drivetrain,
     doors,
-    price: misc.price,
+    price: parsePrice(misc.priceText),
     negotiable: misc.negotiable,
     paintCondition,
     accidentHistory,
     swapAvailable: misc.swapAvailable,
-    damageReport: damageReport ?? null,
+    damageReport,
     city,
-    district: location.district ?? null,
+    district: location.district,
     sellerName: seller.name,
     sellerType,
     sellerPhone: seller.phone,
-    imageUrls: images,
+    imageUrls,
     listingDate,
     description: misc.description,
     specifications: specs,
@@ -660,7 +591,6 @@ const TURKISH_MONTHS: Record<string, string> = {
  */
 function normalizeTurkishDate(text: string): string | null {
   const clean = text.trim().toLowerCase();
-  // Format: "12 ocak 2024"
   const match = clean.match(/^(\d{1,2})\s+([a-zçğışöü]+)\s+(\d{4})$/);
   if (!match) return null;
   const day = match[1].padStart(2, '0');

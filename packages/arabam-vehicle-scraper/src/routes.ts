@@ -53,7 +53,7 @@ router.addHandler(LABEL.SEARCH, async ({ request, page, enqueueLinks, crawler }:
   // Wait for listing cards to be rendered — short timeout, DOM extraction handles fallback
   await page.waitForSelector(
     '.listing-list-item, .listing-item, table[class*="listing"]',
-    { timeout: 10_000 },
+    { timeout: 5_000 },
   ).catch(() => log.warning('[SEARCH] Listing cards selector timed out — page may have changed structure'));
 
   const html = await page.content();
@@ -171,10 +171,11 @@ router.addHandler(LABEL.DETAIL, async ({ request, page }: PlaywrightCrawlingCont
   // Extract listing ID from URL: /ilan/.../{id}
   const listingId = extractListingId(request.url) ?? listingCard?.listingId ?? '';
 
-  // Wait for the specs table to render — short timeout, parser handles missing fields
+  // Wait briefly for the specs table to render — parser falls back to GTM/collectData
+  // from inline scripts when this misses, so we don't need a long wait here.
   await page.waitForSelector(
     '.property-item, .product-properties, [class*="property"]',
-    { timeout: 10_000 },
+    { timeout: 3_000 },
   ).catch(() => log.warning(`[DETAIL] Specs table selector timed out on ${request.url}`));
 
   // Check for Cloudflare challenge
@@ -271,7 +272,7 @@ router.addDefaultHandler(async ({ request, page }: PlaywrightCrawlingContext) =>
 
   // Re-route through detail handler logic
   const input = request.userData.input as Input;
-  await page.waitForSelector('.property-item', { timeout: 8_000 }).catch(() => {});
+  await page.waitForSelector('.property-item', { timeout: 3_000 }).catch(() => {});
 
   let detail;
   try {
