@@ -52,7 +52,7 @@ export const InputSchema = z
       .max(10000, 'maxListings cannot exceed 10,000')
       .default(200),
 
-    scrapeDetails: z.boolean().default(true),
+    scrapeDetails: z.boolean().default(false),
 
     proxyConfig: z
       .object({

@@ -171,12 +171,9 @@ router.addHandler(LABEL.DETAIL, async ({ request, page }: PlaywrightCrawlingCont
   // Extract listing ID from URL: /ilan/.../{id}
   const listingId = extractListingId(request.url) ?? listingCard?.listingId ?? '';
 
-  // Wait briefly for the specs table to render — parser falls back to GTM/collectData
-  // from inline scripts when this misses, so we don't need a long wait here.
-  await page.waitForSelector(
-    '.property-item, .product-properties, [class*="property"]',
-    { timeout: 3_000 },
-  ).catch(() => log.warning(`[DETAIL] Specs table selector timed out on ${request.url}`));
+  // No selector wait: specs table is in the initial HTML, and the parser falls
+  // back to GTM/collectDataObject script texts when DOM specs are missing.
+  // Waiting just burns time on CPU-saturated containers.
 
   // Check for Cloudflare challenge
   const title = await page.title();
@@ -269,10 +266,6 @@ router.addDefaultHandler(async ({ request, page }: PlaywrightCrawlingContext) =>
     log.warning(`[DEFAULT] Cannot determine listing ID from ${request.url}`);
     return;
   }
-
-  // Re-route through detail handler logic
-  const input = request.userData.input as Input;
-  await page.waitForSelector('.property-item', { timeout: 3_000 }).catch(() => {});
 
   let detail;
   try {

@@ -117,9 +117,9 @@
     "scrapeDetails": {
       "title": "Scrape Detail Pages",
       "type": "boolean",
-      "description": "When enabled, visits each listing detail page for complete specs, paint condition, accident history, and seller contact details. Disable for faster card-only scraping.",
-      "default": true,
-      "prefill": true
+      "description": "When enabled, visits each listing detail page for complete specs (engine, hp, color, paint condition, accident history, seller contact). Disabled by default for ~10x faster card-only scraping. Enable when you need full detail — increase run timeout to 1800s+ in that case.",
+      "default": false,
+      "prefill": false
     },
     "proxyConfig": {
       "title": "Proxy Configuration",

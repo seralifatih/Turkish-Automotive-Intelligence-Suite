@@ -237,16 +237,18 @@ try {
 
     proxyConfiguration,
 
-    minConcurrency: 3,
-    maxConcurrency: 5,
+    // Apify default container CPU saturates fast with Playwright; let autoscaler
+    // pick a low concurrency rather than forcing a floor of 3.
+    minConcurrency: 1,
+    maxConcurrency: 3,
     maxRequestRetries: 2,
 
-    requestHandlerTimeoutSecs: 90,
-    navigationTimeoutSecs: 30,
+    requestHandlerTimeoutSecs: 60,
+    navigationTimeoutSecs: 20,
 
     autoscaledPoolOptions: {
       systemStatusOptions: {
-        maxCpuOverloadedRatio: 0.9,
+        maxCpuOverloadedRatio: 0.95,
       },
     },
 
@@ -256,14 +258,19 @@ try {
         const isDetailPage = request.url.includes('/ilan/');
 
         gotoOptions.waitUntil = 'domcontentloaded';
-        gotoOptions.timeout = isDetailPage ? 25_000 : 20_000;
+        gotoOptions.timeout = isDetailPage ? 18_000 : 15_000;
 
         if (!pageWithRouteFlag.__arabamRouteSetup) {
           await page.route('**/*', async (route) => {
             const resourceType = route.request().resourceType();
             const url = route.request().url();
 
-            if (resourceType === 'image' || resourceType === 'media' || resourceType === 'font') {
+            if (
+              resourceType === 'image' ||
+              resourceType === 'media' ||
+              resourceType === 'font' ||
+              resourceType === 'stylesheet'
+            ) {
               await route.abort();
               return;
             }
