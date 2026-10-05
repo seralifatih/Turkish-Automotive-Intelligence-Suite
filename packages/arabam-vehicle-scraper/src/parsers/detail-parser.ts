@@ -21,8 +21,8 @@ import type { Page } from 'playwright';
 import {
   parseMileage,
   parseModelYear,
-  parseEngineSize,
-  parseHorsePower,
+  parseEngineSizeRange,
+  parseHorsePowerRange,
   normalizeFuelType,
   normalizeTransmission,
   normalizeBodyType,
@@ -46,8 +46,14 @@ export interface DetailData {
   mileage: number | null;
   fuelType: string | null;
   transmission: string | null;
+  /** Raw "Vites Tipi" spec text, kept when it doesn't map to a known TransmissionType. */
+  transmissionRaw: string | null;
   engineSize: number | null;
+  engineSizeMin: number | null;
+  engineSizeMax: number | null;
   horsePower: number | null;
+  horsePowerMin: number | null;
+  horsePowerMax: number | null;
   color: string | null;
   bodyType: string | null;
   drivetrain: string | null;
@@ -500,12 +506,25 @@ export async function parseDetailPage(page: Page): Promise<DetailData> {
 
   const gearRaw = getSpec(specs, 'Vites Tipi', 'Vites') ?? gtm['gear'] ?? null;
   const transmission = gearRaw ? normalizeTransmission(gearRaw) : null;
+  // Keep the raw text whenever it doesn't map to a known TransmissionType,
+  // instead of silently dropping it to null.
+  const transmissionRaw = gearRaw && !transmission ? gearRaw : null;
 
+  // Engine size / horsepower: arabam sometimes shows a bucketed range
+  // ("1401 - 1600 cm3", "101 - 125 HP") instead of an exact value. Never
+  // collapse a range to a midpoint and present it as exact — expose
+  // min/max instead, and leave the exact field null for ranges.
   const engineRaw = getSpec(specs, 'Motor Hacmi', 'Motor', 'cc');
-  const engineSize = engineRaw ? parseEngineSize(engineRaw) : null;
+  const engineRange = parseEngineSizeRange(engineRaw);
+  const engineSize = engineRange && engineRange.min === engineRange.max ? engineRange.min : null;
+  const engineSizeMin = engineRange?.min ?? null;
+  const engineSizeMax = engineRange?.max ?? null;
 
   const hpRaw = getSpec(specs, 'Motor Gücü', 'Beygir Gücü');
-  const horsePower = parseHorsePower(hpRaw);
+  const hpRange = parseHorsePowerRange(hpRaw);
+  const horsePower = hpRange && hpRange.min === hpRange.max ? hpRange.min : null;
+  const horsePowerMin = hpRange?.min ?? null;
+  const horsePowerMax = hpRange?.max ?? null;
 
   const color = getSpec(specs, 'Renk', 'Dış Renk') ?? gtm['color'] ?? null;
 
@@ -554,8 +573,13 @@ export async function parseDetailPage(page: Page): Promise<DetailData> {
     mileage,
     fuelType,
     transmission,
+    transmissionRaw,
     engineSize,
+    engineSizeMin,
+    engineSizeMax,
     horsePower,
+    horsePowerMin,
+    horsePowerMax,
     color,
     bodyType,
     drivetrain,

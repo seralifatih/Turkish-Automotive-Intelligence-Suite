@@ -6,6 +6,9 @@
 import {
   parseMileage,
   parseEngineSize,
+  parseEngineSizeRange,
+  parseHorsePower,
+  parseHorsePowerRange,
   parseModelYear,
   normalizeFuelType,
   normalizeTransmission,
@@ -93,6 +96,60 @@ describe('parseEngineSize', () => {
     it('empty string → null', () => expect(parseEngineSize('')).toBeNull());
     it('non-engine string → null', () => expect(parseEngineSize('bilinmiyor')).toBeNull());
   });
+
+  describe('Ranges never fabricate an exact value', () => {
+    it('"1401 - 1600 cm3" → null (not a midpoint)', () => expect(parseEngineSize('1401 - 1600 cm3')).toBeNull());
+    it('"1400-1600" → null', () => expect(parseEngineSize('1400-1600')).toBeNull());
+  });
+});
+
+// ─── parseEngineSizeRange ────────────────────────────────────────────────────
+
+describe('parseEngineSizeRange', () => {
+  it('"1401 - 1600 cm3" → { min: 1401, max: 1600 }', () => {
+    expect(parseEngineSizeRange('1401 - 1600 cm3')).toEqual({ min: 1401, max: 1600 });
+  });
+  it('"1400-1600" → { min: 1400, max: 1600 }', () => {
+    expect(parseEngineSizeRange('1400-1600')).toEqual({ min: 1400, max: 1600 });
+  });
+  it('exact "1598 cc" → { min: 1598, max: 1598 }', () => {
+    expect(parseEngineSizeRange('1598 cc')).toEqual({ min: 1598, max: 1598 });
+  });
+  it('exact "1.6 L" → { min: 1600, max: 1600 }', () => {
+    expect(parseEngineSizeRange('1.6 L')).toEqual({ min: 1600, max: 1600 });
+  });
+  it('null → null', () => expect(parseEngineSizeRange(null)).toBeNull());
+  it('unparseable text → null', () => expect(parseEngineSizeRange('bilinmiyor')).toBeNull());
+});
+
+// ─── parseHorsePower ─────────────────────────────────────────────────────────
+
+describe('parseHorsePower', () => {
+  it('"120 HP" → 120', () => expect(parseHorsePower('120 HP')).toBe(120));
+  it('"150 hp" → 150', () => expect(parseHorsePower('150 hp')).toBe(150));
+
+  describe('Ranges never fabricate an exact value', () => {
+    it('"101 - 125 HP" → null (not a midpoint)', () => expect(parseHorsePower('101 - 125 HP')).toBeNull());
+  });
+
+  describe('Edge cases', () => {
+    it('null → null', () => expect(parseHorsePower(null)).toBeNull());
+    it('undefined → null', () => expect(parseHorsePower(undefined)).toBeNull());
+    it('non-numeric → null', () => expect(parseHorsePower('bilinmiyor')).toBeNull());
+  });
+});
+
+// ─── parseHorsePowerRange ─────────────────────────────────────────────────────
+
+describe('parseHorsePowerRange', () => {
+  it('"101 - 125 HP" → { min: 101, max: 125 }', () => {
+    expect(parseHorsePowerRange('101 - 125 HP')).toEqual({ min: 101, max: 125 });
+  });
+  it('exact "120 HP" → { min: 120, max: 120 }', () => {
+    expect(parseHorsePowerRange('120 HP')).toEqual({ min: 120, max: 120 });
+  });
+  it('null → null', () => expect(parseHorsePowerRange(null)).toBeNull());
+  it('unparseable text → null', () => expect(parseHorsePowerRange('bilinmiyor')).toBeNull());
 });
 
 // ─── parseModelYear ──────────────────────────────────────────────────────────
@@ -163,7 +220,9 @@ describe('normalizeFuelType', () => {
 describe('normalizeTransmission', () => {
   describe('Turkish terms', () => {
     it('"Manuel" → manuel', () => expect(normalizeTransmission('Manuel')).toBe('manuel'));
+    it('"Düz" (bare, as arabam sends it) → manuel', () => expect(normalizeTransmission('Düz')).toBe('manuel'));
     it('"Düz Vites" → manuel', () => expect(normalizeTransmission('Düz Vites')).toBe('manuel'));
+    it('"El" (bare) → manuel', () => expect(normalizeTransmission('El')).toBe('manuel'));
     it('"El Vites" → manuel', () => expect(normalizeTransmission('El Vites')).toBe('manuel'));
     it('"Otomatik" → otomatik', () => expect(normalizeTransmission('Otomatik')).toBe('otomatik'));
     it('"Yarı Otomatik" → yarı_otomatik', () => expect(normalizeTransmission('Yarı Otomatik')).toBe('yarı_otomatik'));
@@ -181,6 +240,16 @@ describe('normalizeTransmission', () => {
   describe('Case insensitivity', () => {
     it('"MANUEL" → manuel', () => expect(normalizeTransmission('MANUEL')).toBe('manuel'));
     it('"otomatik" → otomatik', () => expect(normalizeTransmission('otomatik')).toBe('otomatik'));
+  });
+
+  describe('Bare "el"/"duz" must be exact whole-value/whole-token matches, never substrings', () => {
+    it('"Elektrik" → null (must NOT match "el")', () => expect(normalizeTransmission('Elektrik')).toBeNull());
+    it('"ManuelX" → null (must NOT substring-match "manuel")', () => expect(normalizeTransmission('ManuelX')).toBeNull());
+    it('"Submanuel" → null (must NOT substring-match "manuel")', () => expect(normalizeTransmission('Submanuel')).toBeNull());
+    it('"Automanuel" → null (must NOT substring-match "manuel")', () => expect(normalizeTransmission('Automanuel')).toBeNull());
+    it('"Duzensiz" → null (must NOT substring-match "duz")', () => expect(normalizeTransmission('Duzensiz')).toBeNull());
+    it('"Elci" → null (must NOT substring-match "el")', () => expect(normalizeTransmission('Elci')).toBeNull());
+    it('"Seri" → null (contains neither "el" nor "duz" as a token)', () => expect(normalizeTransmission('Seri')).toBeNull());
   });
 
   describe('Edge cases', () => {
@@ -336,32 +405,67 @@ describe('parsePaintCondition', () => {
     });
   });
 
-  describe('Edge cases', () => {
-    it('null input → empty originalText, 0 panels, not original', () => {
+  describe('Unspecified ("Belirtilmemiş") — unknown, not zero', () => {
+    it('"Belirtilmemiş" → paintedPanels/replacedPanels/isOriginal all null', () => {
+      const result = parsePaintCondition('Belirtilmemiş');
+      expect(result.paintedPanels).toBeNull();
+      expect(result.replacedPanels).toBeNull();
+      expect(result.isOriginal).toBeNull();
+      expect(result.originalText).toBe('Belirtilmemiş');
+    });
+
+    it('"belirtilmemiş" lowercase → same null result', () => {
+      const result = parsePaintCondition('belirtilmemiş');
+      expect(result.paintedPanels).toBeNull();
+      expect(result.isOriginal).toBeNull();
+    });
+  });
+
+  describe('Edge cases — no information in means no information out (null, not 0/false)', () => {
+    it('null input → empty originalText, all fields null', () => {
       const result = parsePaintCondition(null);
       expect(result.originalText).toBe('');
-      expect(result.paintedPanels).toBe(0);
-      expect(result.replacedPanels).toBe(0);
-      expect(result.isOriginal).toBe(false);
+      expect(result.paintedPanels).toBeNull();
+      expect(result.replacedPanels).toBeNull();
+      expect(result.isOriginal).toBeNull();
     });
 
     it('undefined input → same as null', () => {
       const result = parsePaintCondition(undefined);
       expect(result.originalText).toBe('');
+      expect(result.paintedPanels).toBeNull();
+      expect(result.isOriginal).toBeNull();
     });
 
-    it('empty string → 0 panels, not original', () => {
+    it('empty string → all fields null', () => {
       const result = parsePaintCondition('');
-      expect(result.paintedPanels).toBe(0);
-      expect(result.isOriginal).toBe(false);
+      expect(result.paintedPanels).toBeNull();
+      expect(result.replacedPanels).toBeNull();
+      expect(result.isOriginal).toBeNull();
     });
 
-    it('unknown description → isOriginal false, 0 panels', () => {
+    it('genuinely unparseable free text → all fields null, not a guessed 0/false', () => {
       const result = parsePaintCondition('belirsiz durum');
-      expect(result.isOriginal).toBe(false);
+      expect(result.isOriginal).toBeNull();
+      expect(result.paintedPanels).toBeNull();
+      expect(result.replacedPanels).toBeNull();
+      expect(result.originalText).toBe('belirsiz durum');
+    });
+  });
+
+  describe('Known-original text still reports a confirmed 0/true, not null', () => {
+    it('"Tamamı orjinal" → { paintedPanels: 0, replacedPanels: 0, isOriginal: true }', () => {
+      const result = parsePaintCondition('Tamamı orjinal');
       expect(result.paintedPanels).toBe(0);
       expect(result.replacedPanels).toBe(0);
-      expect(result.originalText).toBe('belirsiz durum');
+      expect(result.isOriginal).toBe(true);
+    });
+
+    it('"Boyasız" → { paintedPanels: 0, replacedPanels: 0, isOriginal: true }', () => {
+      const result = parsePaintCondition('Boyasız');
+      expect(result.paintedPanels).toBe(0);
+      expect(result.replacedPanels).toBe(0);
+      expect(result.isOriginal).toBe(true);
     });
   });
 });

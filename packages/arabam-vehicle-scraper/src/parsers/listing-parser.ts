@@ -533,16 +533,22 @@ export async function extractTotalCount(page: Page): Promise<number | null> {
 }
 
 /**
- * Build the next page URL by incrementing skip by take.
- * arabam.com pagination: ?take=20&skip=0, ?take=20&skip=20, etc.
+ * Build the next page URL by incrementing the `page` param.
+ *
+ * Confirmed against arabam.com's own "next page" link (browser inspection):
+ * it keeps `skip`/`take` fixed (e.g. skip=0&take=20) and advances via `page`
+ * instead — e.g. `?skip=0&take=20&page=2`. `skip`/`take` alone do NOT
+ * paginate: skip=20 returns the same listings as skip=0. `take` is kept as
+ * the page size; `page` (1-indexed) is what actually advances the result set.
  */
 export function buildNextPageUrl(currentUrl: string, take = 20): string | null {
   try {
     const url = new URL(currentUrl);
-    const currentSkip = parseInt(url.searchParams.get('skip') ?? '0', 10);
+    const currentPage = parseInt(url.searchParams.get('page') ?? '1', 10);
     const currentTake = parseInt(url.searchParams.get('take') ?? String(take), 10);
-    url.searchParams.set('skip', String(currentSkip + currentTake));
     url.searchParams.set('take', String(currentTake));
+    if (!url.searchParams.has('skip')) url.searchParams.set('skip', '0');
+    url.searchParams.set('page', String(currentPage + 1));
     return url.toString();
   } catch {
     return null;

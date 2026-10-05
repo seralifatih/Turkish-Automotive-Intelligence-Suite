@@ -9,7 +9,8 @@
  *    b) Direct searchUrls: enqueue as SEARCH
  *    c) Direct listingUrls: enqueue as DETAIL
  * 4. Crawl until maxListings reached or queue exhausted
- * 5. Push RUN_SUMMARY record to dataset
+ * 5. Write RUN_SUMMARY to the key-value store (not the dataset — the
+ *    platform bills every default-dataset row, and RUN_SUMMARY is metadata)
  */
 
 import { Actor } from 'apify';
@@ -50,11 +51,15 @@ function slugify(text: string): string {
  *
  * URL pattern:
  *   /ikinci-el/otomobil/{make}-{model}
- *   ?take=20&skip=0
+ *   ?take=20&skip=0&page=1
  *   &minYear=X&maxYear=Y
  *   &minPrice=X&maxPrice=Y
  *   &fuel=X&gear=X
  *   &city=X
+ *
+ * Note: `page` (not `skip`) is what advances the result set — confirmed
+ * against arabam.com's own "next page" link. `take`/`skip` are kept for
+ * parity with the site's own URLs but are otherwise inert.
  *
  * Returns an array — city filter may produce multiple URLs if city is not
  * supported as a URL param (some cities need breadcrumb navigation).
@@ -74,6 +79,10 @@ function buildSearchUrls(filters: Filters): string[] {
   const url = new URL(parts.join('/'));
   url.searchParams.set('take', String(DEFAULT_TAKE));
   url.searchParams.set('skip', '0');
+  // arabam.com's own pagination keeps skip/take fixed and advances via `page`
+  // (confirmed against the site's own "next page" link). skip/take alone do
+  // not paginate — page 1 is implicit but set explicitly for clarity.
+  url.searchParams.set('page', '1');
 
   if (filters.yearMin) url.searchParams.set('minYear', String(filters.yearMin));
   if (filters.yearMax) url.searchParams.set('maxYear', String(filters.yearMax));
@@ -178,10 +187,13 @@ try {
         log.warning(`Skipping non-arabam.com search URL: ${url}`);
         continue;
       }
-      // Ensure take/skip params are present
+      // Ensure take/skip/page params are present. `page` is what actually
+      // advances arabam.com's result set; skip/take are kept for parity with
+      // the site's own URLs but don't paginate on their own.
       const normalized = new URL(url);
       if (!normalized.searchParams.has('take')) normalized.searchParams.set('take', String(DEFAULT_TAKE));
       if (!normalized.searchParams.has('skip')) normalized.searchParams.set('skip', '0');
+      if (!normalized.searchParams.has('page')) normalized.searchParams.set('page', '1');
       initialRequests.push({ url: normalized.toString(), label: LABEL.SEARCH, userData: { input } });
     }
   }
@@ -337,12 +349,26 @@ try {
   const finalState = getState();
   const durationSeconds = Math.round((Date.now() - startTime) / 1000);
 
+  const warnings = [...errors.slice(0, 20)]; // First 20 errors as warnings
+
+  // Never report a shortfall silently: if we didn't reach maxListings, say why.
+  const fellShort = finalState.totalPushed < input.maxListings;
+  if (fellShort) {
+    const shortfallMsg =
+      `Requested ${input.maxListings}, got ${finalState.totalPushed}: ` +
+      (finalState.shortfallReasons.length > 0
+        ? finalState.shortfallReasons.join(' | ')
+        : 'queue exhausted before reaching maxListings (search results may be fewer than requested, or pagination stopped early)');
+    warnings.push(shortfallMsg);
+    log.warning(`[RUN_SUMMARY] ${shortfallMsg}`);
+  }
+
   const runSummary = {
     type: 'RUN_SUMMARY',
     totalRecords: finalState.totalPushed,
     durationSeconds,
     errors: errors.length,
-    warnings: errors.slice(0, 20), // First 20 errors as warnings
+    warnings,
     inputSummary: {
       maxListings: input.maxListings,
       scrapeDetails: input.scrapeDetails,
@@ -351,7 +377,21 @@ try {
   };
 
   log.info(`Run complete: ${finalState.totalPushed} records in ${durationSeconds}s`);
-  await Actor.pushData(runSummary);
+
+  // RUN_SUMMARY goes in the key-value store, not the default dataset — the
+  // platform bills every default-dataset row, and this is metadata, not a
+  // vehicle record. Consumers that used to read it from the dataset should
+  // read the run's key-value store under the "RUN_SUMMARY" key instead.
+  await Actor.setValue('RUN_SUMMARY', runSummary);
+
+  if (fellShort) {
+    await Actor.setStatusMessage(
+      `Finished with ${finalState.totalPushed}/${input.maxListings} listings — see RUN_SUMMARY.warnings for why`,
+      { level: 'WARNING' },
+    );
+  } else {
+    await Actor.setStatusMessage(`Finished with ${finalState.totalPushed}/${input.maxListings} listings`);
+  }
 
 } finally {
   await Actor.exit();

@@ -12,9 +12,10 @@ export type BodyType =
 
 export interface PaintConditionResult {
   originalText: string;
-  paintedPanels: number;
-  replacedPanels: number;
-  isOriginal: boolean;
+  /** null when arabam explicitly reports this as unspecified ("Belirtilmemiş") — never a presented-as-fact 0. */
+  paintedPanels: number | null;
+  replacedPanels: number | null;
+  isOriginal: boolean | null;
 }
 
 const CURRENT_YEAR = new Date().getFullYear();
@@ -88,16 +89,48 @@ export function parseMileage(text: string | null | undefined): number | null {
   return null;
 }
 
-export function parseEngineSize(text: string | null | undefined): number | null {
-  if (!text) return null;
+/**
+ * Result of a range-aware spec parse. arabam.com sometimes shows engine size
+ * and horsepower as a bucketed range (e.g. "1401 - 1600 cm3") rather than an
+ * exact value. `min === max` for an exact value; otherwise both are set and
+ * the exact value must be treated as unknown (never fabricate a midpoint).
+ */
+export interface NumericRangeResult {
+  min: number;
+  max: number;
+}
 
+/**
+ * Parses an engine-size spec that may be an exact value OR a range.
+ * Exact → { min: v, max: v }. Range → { min: lo, max: hi }. Never collapses
+ * a range to a single "midpoint" value — that would present an estimate as fact.
+ */
+export function parseEngineSizeRange(text: string | null | undefined): NumericRangeResult | null {
+  if (!text) return null;
   const clean = text.trim().toLowerCase();
 
   const rangeMatch = clean.match(/^(\d+)\s*[-–]\s*(\d+)\s*(?:cc|cm3|cm\^3)?/);
   if (rangeMatch) {
     const lo = parseInt(rangeMatch[1], 10);
     const hi = parseInt(rangeMatch[2], 10);
-    return Math.round((lo + hi) / 2);
+    return { min: lo, max: hi };
+  }
+
+  const exact = parseEngineSize(text);
+  return exact !== null ? { min: exact, max: exact } : null;
+}
+
+export function parseEngineSize(text: string | null | undefined): number | null {
+  if (!text) return null;
+
+  const clean = text.trim().toLowerCase();
+
+  // Ranges are not an exact value — callers that need min/max should use
+  // parseEngineSizeRange. Returning a midpoint here would fabricate precision
+  // the source data doesn't have.
+  const rangeMatch = clean.match(/^(\d+)\s*[-–]\s*(\d+)\s*(?:cc|cm3|cm\^3)?/);
+  if (rangeMatch) {
+    return null;
   }
 
   const ccMatch = clean.match(/^(\d+)\s*(?:cc|cm3|cm\^3)/);
@@ -168,18 +201,50 @@ export function normalizeFuelType(text: string | null | undefined): FuelType | n
   return null;
 }
 
-const TRANSMISSION_MAP: [RegExp, TransmissionType][] = [
-  [/yari\s*otomatik|semi.?auto|tiptronic|dsg|pdk|cvt|s\s*tronic/, 'yarı_otomatik'],
-  [/otomatik|automatic|automat/, 'otomatik'],
-  [/manuel|manual|duz\s*vites|el\s*vites/, 'manuel'],
+// Audited against arabam.com's "Vites Tipi" spec values. arabam sends the bare
+// word ("Düz", "Otomatik", "Yarı Otomatik") as the spec *value* — the key
+// ("Vites Tipi") carries the word "vites", not the value — so patterns must
+// match the bare word, not just "düz vites"/"el vites" compounds.
+//
+// IMPORTANT: "el" and "duz" are short Turkish words that are also substrings
+// of unrelated words ("elektrik" contains "el"; a hypothetical "duzensiz"
+// contains "duz"). They must only ever be recognized as an EXACT whole
+// normalized value or an exact whole whitespace-delimited token — never via
+// a plain substring/regex match — or values like "Elektrik" risk false-
+// matching "manuel". See matchesWholeValueOrToken below and its tests.
+const TRANSMISSION_EXACT_MAP: [string[], TransmissionType][] = [
+  [['yari otomatik', 'semi auto', 'semi-auto', 'tiptronic', 'dsg', 'pdk', 'cvt', 's tronic'], 'yarı_otomatik'],
+  [['otomatik', 'automatic', 'automat'], 'otomatik'],
+  [['duz', 'duz vites', 'el', 'el vites', 'manuel', 'manual'], 'manuel'],
 ];
+
+/**
+ * True if `normalized` (already run through normalizeLookupText) equals
+ * `keyword` exactly, OR contains `keyword` as one of its whitespace-delimited
+ * tokens. Never matches `keyword` as a substring of a longer token — e.g.
+ * keyword "el" matches the token "el" but not "elektrik".
+ */
+function matchesWholeValueOrToken(normalized: string, keyword: string): boolean {
+  if (normalized === keyword) return true;
+  const keywordTokens = keyword.split(' ');
+  const valueTokens = normalized.split(' ');
+  if (keywordTokens.length === 1) {
+    return valueTokens.includes(keyword);
+  }
+  // Multi-word keyword ("yari otomatik", "el vites"): check it appears as a
+  // contiguous run of whole tokens, not a substring of the joined string.
+  for (let i = 0; i <= valueTokens.length - keywordTokens.length; i++) {
+    if (keywordTokens.every((kt, j) => valueTokens[i + j] === kt)) return true;
+  }
+  return false;
+}
 
 export function normalizeTransmission(text: string | null | undefined): TransmissionType | null {
   if (!text) return null;
 
   const normalized = normalizeLookupText(text);
-  for (const [pattern, value] of TRANSMISSION_MAP) {
-    if (pattern.test(normalized)) return value;
+  for (const [keywords, value] of TRANSMISSION_EXACT_MAP) {
+    if (keywords.some((keyword) => matchesWholeValueOrToken(normalized, keyword))) return value;
   }
 
   return null;
@@ -228,7 +293,11 @@ export function vehicleFingerprint(
   ].join('-');
 }
 
-export function parseHorsePower(text: string | null | undefined): number | null {
+/**
+ * Parses a horsepower spec that may be an exact value OR a range.
+ * Exact → { min: v, max: v }. Range → { min: lo, max: hi }. See parseEngineSizeRange.
+ */
+export function parseHorsePowerRange(text: string | null | undefined): NumericRangeResult | null {
   if (!text) return null;
   const clean = text.trim().toLowerCase();
 
@@ -236,7 +305,22 @@ export function parseHorsePower(text: string | null | undefined): number | null 
   if (rangeMatch) {
     const lo = parseInt(rangeMatch[1], 10);
     const hi = parseInt(rangeMatch[2], 10);
-    return Math.round((lo + hi) / 2);
+    return { min: lo, max: hi };
+  }
+
+  const exact = parseHorsePower(text);
+  return exact !== null ? { min: exact, max: exact } : null;
+}
+
+export function parseHorsePower(text: string | null | undefined): number | null {
+  if (!text) return null;
+  const clean = text.trim().toLowerCase();
+
+  // A range is not an exact value — see parseHorsePowerRange for min/max.
+  // Returning a midpoint here would fabricate precision the source lacks.
+  const rangeMatch = clean.match(/(\d+)\s*[-–]\s*(\d+)/);
+  if (rangeMatch) {
+    return null;
   }
 
   const singleMatch = clean.match(/(\d+)/);
@@ -269,6 +353,22 @@ export function parsePaintCondition(text: string | null | undefined): PaintCondi
     }
   }
 
+  // arabam explicitly marks some listings' paint condition as unspecified
+  // ("Belirtilmemiş" / "Belirtilmemis"). That is NOT the same as "0 panels,
+  // not original" — it means the seller didn't say. Report it as unknown
+  // (null) rather than presenting a guess as a fact.
+  const unspecifiedPatterns = [/^belirtilmemis$/, /^bilinmiyor$/, /^belirsiz$/];
+  for (const pattern of unspecifiedPatterns) {
+    if (pattern.test(normalized)) {
+      return {
+        originalText,
+        paintedPanels: null,
+        replacedPanels: null,
+        isOriginal: null,
+      };
+    }
+  }
+
   // Sum every "<n> boya/boyali/lokal boyali" occurrence (count lokal as half-painted = +1).
   let paintedPanels = 0;
   const boyaliPattern = /(\d+)\s*(?:lokal\s+)?boya(?:li)?/g;
@@ -293,19 +393,23 @@ export function parsePaintCondition(text: string | null | undefined): PaintCondi
     };
   }
 
+  // Text that doesn't match any known pattern (original/unspecified/painted/
+  // replaced) is unparseable, not a confirmed "no paint work" — report
+  // unknown (null) rather than presenting a guess as 0/false. Same for
+  // empty/null input: no information in means no information out.
   if (trimmed.length > 0) {
     return {
       originalText,
-      paintedPanels: 0,
-      replacedPanels: 0,
-      isOriginal: false,
+      paintedPanels: null,
+      replacedPanels: null,
+      isOriginal: null,
     };
   }
 
   return {
     originalText: '',
-    paintedPanels: 0,
-    replacedPanels: 0,
-    isOriginal: false,
+    paintedPanels: null,
+    replacedPanels: null,
+    isOriginal: null,
   };
 }

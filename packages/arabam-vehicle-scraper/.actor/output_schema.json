@@ -2,7 +2,7 @@
   "$schema": "https://apify-projects.github.io/actor-json-schemas/output.json?v=0.3",
   "actorOutputSchemaVersion": 1,
   "title": "Output schema of Arabam.com Vehicle Scraper",
-  "description": "This actor stores scraped vehicle listings and a RUN_SUMMARY record in the default dataset.",
+  "description": "This actor stores scraped vehicle listings in the default dataset. As of 1.1.0, the RUN_SUMMARY is stored in the run's key-value store (key \"RUN_SUMMARY\"), not the dataset — see the runSummary entry below.",
   "type": "object",
   "properties": {
     "vehicleListings": {
@@ -14,8 +14,8 @@
     "runSummary": {
       "type": "string",
       "title": "Run summary",
-      "description": "RUN_SUMMARY dataset row with totals, duration, warnings, and the effective input summary for the scrape.",
-      "template": "{{links.apiDefaultDatasetUrl}}/items?view=runSummary"
+      "description": "RUN_SUMMARY key-value store record with totals, duration, warnings, and the effective input summary for the scrape. BREAKING CHANGE (1.1.0): previously a dataset row (view=runSummary); now a key-value store record.",
+      "template": "{{links.apiDefaultKeyValueStoreUrl}}/records/RUN_SUMMARY"
     }
   }
 }

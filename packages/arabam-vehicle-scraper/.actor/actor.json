@@ -3,7 +3,7 @@
   "name": "arabam-vehicle-scraper",
   "title": "Arabam.com Vehicle Scraper - Turkish Auto Marketplace Data API",
   "description": "Extract structured used-car listings from Arabam.com, including price, mileage, specs, seller details, location, condition data, and optional detail-page enrichment.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "buildTag": "latest",
   "environmentVariables": {},
   "dockerfile": "../Dockerfile",
@@ -50,33 +50,6 @@
               "city": { "label": "City", "format": "text" },
               "sellerType": { "label": "Seller Type", "format": "text" },
               "url": { "label": "URL", "format": "link" }
-            }
-          }
-        },
-        "runSummary": {
-          "title": "Run Summary",
-          "transformation": {
-            "filter": "type == 'RUN_SUMMARY'",
-            "fields": [
-              "totalRecords",
-              "durationSeconds",
-              "errors",
-              "inputSummary.maxListings",
-              "inputSummary.scrapeDetails",
-              "inputSummary.initialRequests",
-              "warnings"
-            ]
-          },
-          "display": {
-            "component": "table",
-            "properties": {
-              "totalRecords": { "label": "Records", "format": "number" },
-              "durationSeconds": { "label": "Duration (s)", "format": "number" },
-              "errors": { "label": "Errors", "format": "number" },
-              "inputSummary.maxListings": { "label": "Max Listings", "format": "number" },
-              "inputSummary.scrapeDetails": { "label": "Scrape Details", "format": "boolean" },
-              "inputSummary.initialRequests": { "label": "Initial Requests", "format": "number" },
-              "warnings": { "label": "Warnings", "format": "text" }
             }
           }
         }

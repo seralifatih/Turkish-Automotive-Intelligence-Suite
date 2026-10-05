@@ -86,9 +86,11 @@ const PriceSchema = z.object({
 
 const PaintConditionSchema = z.object({
   originalText: z.string(),
-  paintedPanels: z.number().int().min(0),
-  replacedPanels: z.number().int().min(0),
-  isOriginal: z.boolean(),
+  // null when arabam explicitly reports paint condition as unspecified
+  // ("Belirtilmemiş") — distinct from a confirmed 0/false.
+  paintedPanels: z.number().int().min(0).nullable(),
+  replacedPanels: z.number().int().min(0).nullable(),
+  isOriginal: z.boolean().nullable(),
 });
 
 export const ArabamVehicleSchema = z.object({
@@ -108,8 +110,18 @@ export const ArabamVehicleSchema = z.object({
   mileage: z.number().int().min(0).nullable(),
   fuelType: z.string().nullable(),
   transmission: z.string().nullable(),
+  // Raw "Vites Tipi" text when it doesn't map to a known transmission value
+  // (e.g. a future arabam value this scraper doesn't recognize yet).
+  transmissionRaw: z.string().nullable(),
+  // engineSize/horsePower are null when the spec is a range ("1401 - 1600 cm3") —
+  // never a fabricated midpoint. engineSizeMin/Max (horsePowerMin/Max) are set
+  // for both exact values (min === max) and ranges.
   engineSize: z.number().int().nullable(),
+  engineSizeMin: z.number().int().nullable(),
+  engineSizeMax: z.number().int().nullable(),
   horsePower: z.number().int().nullable(),
+  horsePowerMin: z.number().int().nullable(),
+  horsePowerMax: z.number().int().nullable(),
   drivetrain: z.string().nullable(),
   color: z.string().nullable(),
   doors: z.number().int().nullable(),

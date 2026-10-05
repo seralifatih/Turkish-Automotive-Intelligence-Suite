@@ -6,6 +6,20 @@ Extract comprehensive vehicle listing data from [arabam.com](https://www.arabam.
 
 ---
 
+## ⚠️ Breaking changes in v1.1.0
+
+If you're upgrading from `1.0.0`, review these before you deploy:
+
+1. **`RUN_SUMMARY` moved from the default dataset to the key-value store.** It's no longer a dataset row — read it from the run's key-value store under the key `RUN_SUMMARY` instead. Any code filtering the dataset for `type == 'RUN_SUMMARY'` must switch to a key-value store read.
+2. **`paintCondition.paintedPanels` / `replacedPanels` / `isOriginal` are now nullable.** They're `null` whenever paint condition is unspecified or unparseable, instead of the previous (misleading) `0`/`false`. Null-check before using these in a boolean check or arithmetic.
+3. **`transmission` matching is now exact-value/exact-token only, never substring.** Fixes a class of potential false-positive matches. If you relied on partial/fuzzy transmission text matching elsewhere, re-check against the new `transmissionRaw` field.
+4. **Five new fields on every vehicle record:** `transmissionRaw`, `engineSizeMin`, `engineSizeMax`, `horsePowerMin`, `horsePowerMax`. Update any strict/`additionalProperties: false` schema validation on your side.
+5. **`engineSize` / `horsePower` are `null` for range specs** (e.g. `"1401 - 1600 cm3"`) where they previously held a fabricated midpoint. Use `engineSizeMin`/`Max` (`horsePowerMin`/`Max`) if you need a range-based estimate.
+
+Full details in [CHANGELOG.md](./CHANGELOG.md).
+
+---
+
 ## What You Get
 
 Each vehicle record includes:
@@ -90,7 +104,7 @@ Two modes — use either filters or direct URLs:
 
 ## Output
 
-Each record is pushed to the default dataset. Two record types:
+Vehicle records are pushed to the default dataset (billed per record — see Pricing). The run summary is **not** a dataset record; it's written to the run's key-value store under the `RUN_SUMMARY` key, so it's never billed and never mixed into your vehicle data.
 
 ### Vehicle record (`scrapeDetails: true`)
 
@@ -107,8 +121,13 @@ Each record is pushed to the default dataset. Two record types:
   "mileage": 134000,
   "fuelType": "benzin",
   "transmission": "otomatik",
+  "transmissionRaw": null,
   "engineSize": 1498,
+  "engineSizeMin": 1498,
+  "engineSizeMax": 1498,
   "horsePower": 150,
+  "horsePowerMin": 150,
+  "horsePowerMax": 150,
   "drivetrain": "FWD",
   "color": "Siyah",
   "doors": 4,
@@ -153,7 +172,13 @@ Each record is pushed to the default dataset. Two record types:
 }
 ```
 
-### Run summary (always appended at end)
+**Engine size / horsepower ranges:** arabam sometimes shows a bucketed range instead of an exact value (e.g. `"1401 - 1600 cm3"`, `"101 - 125 HP"`). When that happens, `engineSize`/`horsePower` are `null` — **never** a fabricated midpoint — and `engineSizeMin`/`engineSizeMax` (`horsePowerMin`/`horsePowerMax`) carry the range instead. For an exact spec (`"1598 CC"`, `"120 HP"`), `engineSize`/`horsePower` are set and `Min`/`Max` both equal that value.
+
+**Unmapped transmission values:** if arabam's "Vites Tipi" value doesn't match a known `manuel`/`otomatik`/`yarı_otomatik` type, `transmission` is `null` and the raw text is kept in `transmissionRaw` instead of being silently dropped.
+
+**Image URLs:** `imageUrls` only ever contains images belonging to this listing. arabam's detail page can render a "similar listings" carousel using the same gallery markup, which would otherwise leak other listings' photos into this one; they're filtered out by listingId before `imageCount` is computed.
+
+### Run summary (key-value store, key `RUN_SUMMARY`)
 
 ```json
 {
@@ -161,7 +186,7 @@ Each record is pushed to the default dataset. Two record types:
   "totalRecords": 187,
   "durationSeconds": 420,
   "errors": 2,
-  "warnings": ["Failed: https://..."],
+  "warnings": ["Failed: https://...", "Requested 200, got 187: ..."],
   "inputSummary": {
     "maxListings": 200,
     "scrapeDetails": true,
@@ -169,6 +194,8 @@ Each record is pushed to the default dataset. Two record types:
   }
 }
 ```
+
+If `totalRecords` is less than `maxListings`, `warnings` always includes a `"Requested X, got Y: <reason>"` entry explaining the shortfall — this is never silent.
 
 ---
 
@@ -182,6 +209,11 @@ Paint condition is the most important vehicle condition signal in the Turkish us
 | `Tamamı orjinal` | 0 | 0 | `true` |
 | `2 boyalı` | 2 | 0 | `false` |
 | `3 boya 1 değişen` | 3 | 1 | `false` |
+| `Belirtilmemiş` (unspecified) | `null` | `null` | `null` |
+| unparseable/unrecognized text | `null` | `null` | `null` |
+| missing/empty spec | `null` | `null` | `null` |
+
+A confirmed `0`/`true` (or counted panel numbers) is only returned when the text actually says something — "no paint work," or a specific count. Anything else — unspecified, unrecognized, or missing — is reported as `null`, never guessed as `0`/`false`.
 
 ---
 
@@ -211,7 +243,7 @@ Configure via `proxyConfig`:
 
 ### Pagination
 
-The scraper uses arabam.com's `skip`/`take` pagination system. Each search page returns up to 20 listings. The scraper automatically paginates until `maxListings` is reached.
+The scraper paginates using arabam.com's `page` query param (confirmed against the site's own "next page" link — `skip`/`take` are present in the URL but don't advance the result set on their own). Each search page returns up to 20 listings. The scraper automatically paginates until `maxListings` is reached, and detects/stops on a duplicate page rather than silently re-requesting the same listings.
 
 ---
 
@@ -219,14 +251,16 @@ The scraper uses arabam.com's `skip`/`take` pagination system. Each search page 
 
 **$6 per 1,000 vehicle listings**
 
-Charged on successful records pushed to the dataset. Run summary records are free.
+Charged on successful vehicle records pushed to the dataset. The run summary is stored in the key-value store, not the dataset, so it's never billed.
 
 ---
 
 ## FAQ
 
 **Why is `sellerPhone` null?**
-Arabam.com hides phone numbers until a user clicks "Telefonu Göster." The phone reveal requires authentication and is not scrappable without a logged-in session.
+Two separate reasons, both resulting in `null`:
+1. Arabam.com hides phone numbers until a user clicks "Telefonu Göster." The phone reveal requires authentication and is not scrapeable without a logged-in session.
+2. When a number **is** present in the page markup, it's almost always arabam's own central masked contact number (`+908507599000`) shown on every listing regardless of seller — not the actual seller's phone. This scraper detects that exact number and reports `null` instead of presenting it as seller contact info. A different, non-masked number (if arabam ever renders one) is passed through as-is.
 
 **Can I scrape all listings without filters?**
 Yes — use `https://www.arabam.com/ikinci-el/otomobil` as a `searchUrls` entry. Set `maxListings` to control volume.
@@ -239,8 +273,6 @@ This actor scrapes in real-time — data is as fresh as your run. Arabam listing
 - If still blocked, try reducing `maxConcurrency` by setting it lower (contact support)
 
 ---
-
-## Also by this developer
 
 ### Turkish E-Commerce Intelligence Suite
 
@@ -255,4 +287,91 @@ This actor scrapes in real-time — data is as fresh as your run. Arabam listing
 
 ---
 
-*Building the definitive data intelligence toolkit for Turkey. Specializing in Turkish e-commerce and automotive market data. 6 actors | 2 verticals | Pay-per-event pricing.*
+## 🇹🇷 Turkish Data Intelligence Portfolio
+
+This actor is part of a suite of 9 specialized Turkish market data tools:
+
+**E-Commerce Intelligence:**
+- N11 Product Scraper — Turkey's third-largest marketplace
+- Turkish Marketplace Seller Intelligence — Trendyol, Hepsiburada, N11 seller profiles
+- Turkish E-Commerce Review Aggregator — Cross-platform reviews with sentiment analysis
+
+**Automotive Intelligence:**
+- Arabam.com Vehicle Scraper — Used car listings with paint condition data
+- Turkish Auto Price Tracker — Cross-platform vehicle valuation
+- Turkish Auto Dealer Intelligence — Galeri profiles and inventory analytics
+
+**Real Estate Intelligence:**
+- Emlakjet Property Scraper — Zero-competition property data
+- Turkish Property Valuation Engine — Cross-platform pricing with rental yield analysis
+- Turkish Real Estate Agency Scraper — Emlak ofisi profiles and portfolios
+
+All actors share consistent output schemas, Turkish language support, and transparent 
+pay-per-event pricing. Built and maintained by [your username].
+
+
+This actor is part of a suite of 9 specialized Turkish market data tools:
+
+**E-Commerce Intelligence:**
+- N11 Product Scraper ? Turkey's third-largest marketplace
+- Turkish Marketplace Seller Intelligence ? Trendyol, Hepsiburada, N11 seller profiles
+- Turkish E-Commerce Review Aggregator ? Cross-platform reviews with sentiment analysis
+
+**Automotive Intelligence:**
+- Arabam.com Vehicle Scraper ? Used car listings with paint condition data
+- Turkish Auto Price Tracker ? Cross-platform vehicle valuation
+- Turkish Auto Dealer Intelligence ? Galeri profiles and inventory analytics
+
+**Real Estate Intelligence:**
+- Emlakjet Property Scraper ? Zero-competition property data
+- Turkish Property Valuation Engine ? Cross-platform pricing with rental yield analysis
+- Turkish Real Estate Agency Scraper ? Emlak ofisi profiles and portfolios
+
+All actors share consistent output schemas, Turkish language support, and transparent 
+pay-per-event pricing. Built and maintained by [your username].
+
+This actor is part of a suite of 9 specialized Turkish market data tools:
+
+**E-Commerce Intelligence:**
+- N11 Product Scraper ? Turkey's third-largest marketplace
+- Turkish Marketplace Seller Intelligence ? Trendyol, Hepsiburada, N11 seller profiles
+- Turkish E-Commerce Review Aggregator ? Cross-platform reviews with sentiment analysis
+
+**Automotive Intelligence:**
+- Arabam.com Vehicle Scraper ? Used car listings with paint condition data
+- Turkish Auto Price Tracker ? Cross-platform vehicle valuation
+- Turkish Auto Dealer Intelligence ? Galeri profiles and inventory analytics
+
+**Real Estate Intelligence:**
+- Emlakjet Property Scraper ? Zero-competition property data
+- Turkish Property Valuation Engine ? Cross-platform pricing with rental yield analysis
+- Turkish Real Estate Agency Scraper ? Emlak ofisi profiles and portfolios
+
+All actors share consistent output schemas, Turkish language support, and transparent 
+pay-per-event pricing. Built and maintained by [your username].
+Zero-competition property data
+- Turkish Property Valuation Engine ? Cross-platform pricing with rental yield analysis
+- Turkish Real Estate Agency Scraper ? Emlak ofisi profiles and portfolios
+
+All actors share consistent output schemas, Turkish language support, and transparent 
+pay-per-event pricing. Built and maintained by [your username].
+
+This actor is part of a suite of 9 specialized Turkish market data tools:
+
+**E-Commerce Intelligence:**
+- N11 Product Scraper ? Turkey's third-largest marketplace
+- Turkish Marketplace Seller Intelligence ? Trendyol, Hepsiburada, N11 seller profiles
+- Turkish E-Commerce Review Aggregator ? Cross-platform reviews with sentiment analysis
+
+**Automotive Intelligence:**
+- Arabam.com Vehicle Scraper ? Used car listings with paint condition data
+- Turkish Auto Price Tracker ? Cross-platform vehicle valuation
+- Turkish Auto Dealer Intelligence ? Galeri profiles and inventory analytics
+
+**Real Estate Intelligence:**
+- Emlakjet Property Scraper ? Zero-competition property data
+- Turkish Property Valuation Engine ? Cross-platform pricing with rental yield analysis
+- Turkish Real Estate Agency Scraper ? Emlak ofisi profiles and portfolios
+
+All actors share consistent output schemas, Turkish language support, and transparent 
+pay-per-event pricing. Built and maintained by [your username].
