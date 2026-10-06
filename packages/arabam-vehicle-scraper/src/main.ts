@@ -17,7 +17,7 @@ import { Actor } from 'apify';
 import { PlaywrightCrawler, log, LogLevel } from 'crawlee';
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import { router, setMaxListings, getState } from './routes.js';
+import { router, setMaxListings, getState, isBudgetExhausted } from './routes.js';
 import { InputSchema, LABEL, FUEL_TO_ID, TRANSMISSION_TO_ID } from './types.js';
 import type { Input, Filters } from './types.js';
 
@@ -112,6 +112,11 @@ function buildSearchUrls(filters: Filters): string[] {
 
 await Actor.init();
 
+// Declared outside the try block so the catch clause below can still reach
+// it — a thrown error inside try must not lose the ability to write a
+// RUN_SUMMARY reflecting whatever progress was made before the throw.
+let writeRunSummaryRef: ((note?: string) => Promise<void>) | undefined;
+
 try {
   // ── Input validation ────────────────────────────────────────────────────────
 
@@ -135,6 +140,85 @@ try {
   });
 
   setMaxListings(input.maxListings);
+
+  // ── Run summary (defined early so it's reachable from the normal end-of-run
+  //    path AND from 'migrating'/'aborting' event handlers AND from a thrown-
+  //    error fallback — RUN_SUMMARY must never be skipped just because the
+  //    run didn't finish cleanly) ────────────────────────────────────────────
+
+  const startTime = Date.now();
+  const errors: string[] = [];
+  let initialRequestCount = 0;
+  let summaryWritten = false;
+
+  async function writeRunSummary(note?: string): Promise<void> {
+    if (summaryWritten) return; // never write twice (e.g. migrating then normal completion)
+    summaryWritten = true;
+
+    const finalState = getState();
+    const durationSeconds = Math.round((Date.now() - startTime) / 1000);
+
+    const warnings = [...errors.slice(0, 20)]; // First 20 errors as warnings
+    if (note) warnings.push(note);
+
+    // Never report a shortfall silently: if we didn't reach maxListings, say why.
+    const fellShort = finalState.totalPushed < input.maxListings;
+    if (fellShort) {
+      const shortfallMsg =
+        `Requested ${input.maxListings}, got ${finalState.totalPushed}: ` +
+        (finalState.shortfallReasons.length > 0
+          ? finalState.shortfallReasons.join(' | ')
+          : 'queue exhausted before reaching maxListings (search results may be fewer than requested, or pagination stopped early)');
+      warnings.push(shortfallMsg);
+      log.warning(`[RUN_SUMMARY] ${shortfallMsg}`);
+    }
+
+    const runSummary = {
+      type: 'RUN_SUMMARY',
+      totalRecords: finalState.totalPushed,
+      durationSeconds,
+      errors: errors.length,
+      warnings,
+      inputSummary: {
+        maxListings: input.maxListings,
+        scrapeDetails: input.scrapeDetails,
+        initialRequests: initialRequestCount,
+      },
+    };
+
+    log.info(`Run complete: ${finalState.totalPushed} records in ${durationSeconds}s${note ? ` (${note})` : ''}`);
+
+    // RUN_SUMMARY goes in the key-value store, not the default dataset — the
+    // platform bills every default-dataset row, and this is metadata, not a
+    // vehicle record. Consumers that used to read it from the dataset should
+    // read the run's key-value store under the "RUN_SUMMARY" key instead.
+    await Actor.setValue('RUN_SUMMARY', runSummary);
+
+    if (fellShort) {
+      await Actor.setStatusMessage(
+        `Finished with ${finalState.totalPushed}/${input.maxListings} listings — see RUN_SUMMARY.warnings for why`,
+        { level: 'WARNING' },
+      );
+    } else {
+      await Actor.setStatusMessage(`Finished with ${finalState.totalPushed}/${input.maxListings} listings`);
+    }
+  }
+
+  writeRunSummaryRef = writeRunSummary;
+
+  // Apify can migrate the run to a new container, or abort it (e.g. user
+  // cancellation, platform-level abort) — in both cases the process may not
+  // reach the normal post-crawler.run() code below. Write whatever RUN_SUMMARY
+  // we have so far rather than losing it. (A hard run-timeout kill is the one
+  // case nothing here can catch — the container is terminated with no more
+  // code execution — but graceful migration/abort and any in-process error
+  // are all covered.)
+  Actor.on('migrating', () => {
+    void writeRunSummary('Run is migrating to a new container — summary reflects progress at migration time.');
+  });
+  Actor.on('aborting', () => {
+    void writeRunSummary('Run is aborting — summary reflects progress at abort time.');
+  });
 
   // ── Validate that we have at least one input source ─────────────────────────
 
@@ -210,11 +294,9 @@ try {
   }
 
   log.info(`Seeding queue with ${initialRequests.length} initial request(s)`);
+  initialRequestCount = initialRequests.length;
 
   // ── Crawler configuration ───────────────────────────────────────────────────
-
-  const startTime = Date.now();
-  const errors: string[] = [];
 
   const crawler = new PlaywrightCrawler({
     // Headless is required on Apify containers — non-headless hangs or isn't supported
@@ -265,7 +347,21 @@ try {
     },
 
     preNavigationHooks: [
+      // Skip navigation entirely for a DETAIL request that's already been
+      // dequeued (so crawler.stop()'s "no new tasks" gate didn't catch it)
+      // but whose work is no longer needed because maxListings was already
+      // satisfied by other in-flight requests. Setting skipNavigation here
+      // means no page load happens at all — the DETAIL handler's own guard
+      // (`if (state.totalPushed >= state.maxListings) return;`) then returns
+      // immediately once the (unnavigated) handler runs.
+      async ({ request }) => {
+        if (request.label === LABEL.DETAIL && isBudgetExhausted()) {
+          request.skipNavigation = true;
+        }
+      },
       async ({ page, request }, gotoOptions) => {
+        if (request.skipNavigation) return;
+
         const pageWithRouteFlag = page as typeof page & { __arabamRouteSetup?: boolean };
         const isDetailPage = request.url.includes('/ilan/');
 
@@ -344,55 +440,19 @@ try {
   await crawler.addRequests(initialRequests);
   await crawler.run();
 
-  // ── Run summary ─────────────────────────────────────────────────────────────
+  // Normal completion path — crawler.run() resolved (including via
+  // crawler.stop(), which lets it resolve cleanly rather than timing out).
+  await writeRunSummary();
 
-  const finalState = getState();
-  const durationSeconds = Math.round((Date.now() - startTime) / 1000);
-
-  const warnings = [...errors.slice(0, 20)]; // First 20 errors as warnings
-
-  // Never report a shortfall silently: if we didn't reach maxListings, say why.
-  const fellShort = finalState.totalPushed < input.maxListings;
-  if (fellShort) {
-    const shortfallMsg =
-      `Requested ${input.maxListings}, got ${finalState.totalPushed}: ` +
-      (finalState.shortfallReasons.length > 0
-        ? finalState.shortfallReasons.join(' | ')
-        : 'queue exhausted before reaching maxListings (search results may be fewer than requested, or pagination stopped early)');
-    warnings.push(shortfallMsg);
-    log.warning(`[RUN_SUMMARY] ${shortfallMsg}`);
+} catch (err) {
+  // Any unexpected error still gets a RUN_SUMMARY reflecting progress so far,
+  // as long as we got far enough to have one (i.e. input was valid — if
+  // input itself failed validation, there was never a crawl to summarize).
+  const message = err instanceof Error ? err.message : String(err);
+  if (writeRunSummaryRef) {
+    await writeRunSummaryRef(`Run ended with an error: ${message}`);
   }
-
-  const runSummary = {
-    type: 'RUN_SUMMARY',
-    totalRecords: finalState.totalPushed,
-    durationSeconds,
-    errors: errors.length,
-    warnings,
-    inputSummary: {
-      maxListings: input.maxListings,
-      scrapeDetails: input.scrapeDetails,
-      initialRequests: initialRequests.length,
-    },
-  };
-
-  log.info(`Run complete: ${finalState.totalPushed} records in ${durationSeconds}s`);
-
-  // RUN_SUMMARY goes in the key-value store, not the default dataset — the
-  // platform bills every default-dataset row, and this is metadata, not a
-  // vehicle record. Consumers that used to read it from the dataset should
-  // read the run's key-value store under the "RUN_SUMMARY" key instead.
-  await Actor.setValue('RUN_SUMMARY', runSummary);
-
-  if (fellShort) {
-    await Actor.setStatusMessage(
-      `Finished with ${finalState.totalPushed}/${input.maxListings} listings — see RUN_SUMMARY.warnings for why`,
-      { level: 'WARNING' },
-    );
-  } else {
-    await Actor.setStatusMessage(`Finished with ${finalState.totalPushed}/${input.maxListings} listings`);
-  }
-
+  throw err;
 } finally {
   await Actor.exit();
 }

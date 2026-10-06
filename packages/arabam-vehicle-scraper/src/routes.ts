@@ -71,6 +71,19 @@ export function getState(): Readonly<CrawlerState> {
   return state;
 }
 
+/**
+ * True once we've already pushed enough records to satisfy maxListings.
+ * Used by main.ts's preNavigationHooks to skip navigation entirely for a
+ * DETAIL request that slipped into the "already dequeued, about to run"
+ * window right as crawler.stop() was called — avoiding a wasted page fetch
+ * for work we no longer need. (The SEARCH handler's enqueue cap prevents
+ * *new* excess DETAIL requests from being added in the first place; this
+ * only guards the small in-flight-concurrency race at the tail end.)
+ */
+export function isBudgetExhausted(): boolean {
+  return state.totalPushed >= state.maxListings;
+}
+
 /** Record a reason we may come up short of maxListings, for RUN_SUMMARY visibility. */
 export function recordShortfallReason(reason: string): void {
   state.shortfallReasons.push(reason);
@@ -160,10 +173,20 @@ router.addHandler(LABEL.SEARCH, async ({ request, page, enqueueLinks, crawler }:
 
     let actuallyNew = 0;
     if (toEnqueue.length > 0) {
-      // crawler.addRequests() is batched: the returned `addedRequests` only
-      // covers what was added synchronously. Opt into waiting for the full
-      // batch so `wasAlreadyPresent` reflects every URL we just submitted —
-      // otherwise a same-tick duplicate could be miscounted as "new".
+      // crawler.addRequests() → addRequestsBatched() under the hood. Its
+      // result shape (verified against crawlee 3.16 source) is:
+      //   { addedRequests, waitForAllRequestsToBeAdded }
+      // `addedRequests` holds the first batch (default batchSize: 1000, so
+      // in practice our whole call fits in one batch). `waitForAllRequestsToBeAdded`
+      // is a promise that resolves ONLY with chunks BEYOND the first batch —
+      // when everything fits in one batch (our case), that promise resolves
+      // to `[]` even though every request was genuinely added. Passing
+      // `waitForAllRequestsToBeAdded: true` makes the call await internally
+      // and merge all of it into `addedRequests` before returning — so
+      // `addedRequests` (not the promise) is the correct field to read here.
+      // Reading the promise instead (the previous bug) made every batch look
+      // like 100% duplicates, even though the requests were added and later
+      // processed/pushed correctly.
       const result = await crawler.addRequests(
         toEnqueue.map((listing) => ({
           url: listing.url,
@@ -175,7 +198,7 @@ router.addHandler(LABEL.SEARCH, async ({ request, page, enqueueLinks, crawler }:
         })),
         { waitForAllRequestsToBeAdded: true },
       );
-      const processed = await result.waitForAllRequestsToBeAdded;
+      const processed = result.addedRequests;
       actuallyNew = processed.filter((r) => !r.wasAlreadyPresent).length;
       const alreadyPresent = processed.length - actuallyNew;
       if (alreadyPresent > 0) {
@@ -186,13 +209,19 @@ router.addHandler(LABEL.SEARCH, async ({ request, page, enqueueLinks, crawler }:
       }
     }
 
-    state.totalEnqueued += actuallyNew;
-    log.info(`[SEARCH] Enqueued ${actuallyNew} new detail pages (of ${toEnqueue.length} candidates; ${toEnqueue.length - actuallyNew} were duplicates)`);
+    // Hard cap: never let totalEnqueued exceed maxListings even if the counting
+    // above is ever off by a bit — this is the backstop for bug #2.
+    state.totalEnqueued = Math.min(state.totalEnqueued + actuallyNew, state.maxListings);
+    log.info(`[SEARCH] Enqueued ${actuallyNew} new detail pages (of ${toEnqueue.length} candidates; ${toEnqueue.length - actuallyNew} were duplicates) — totalEnqueued ${state.totalEnqueued}/${state.maxListings}`);
 
-    if (listings.length > 0 && actuallyNew === 0 && newListings.length > 0) {
-      // We had new listingIds but every single one produced a URL already in the
-      // queue — almost certainly the same listings reachable via a different
-      // query string (e.g. pagination param not actually changing the result set).
+    if (listings.length > 0 && actuallyNew === 0 && newListings.length > 0 && toEnqueue.length > 0) {
+      // We had new listingIds and candidate URLs to enqueue, but every single
+      // one produced a URL already in the queue — almost certainly the same
+      // listings reachable via a different query string (e.g. pagination
+      // param not actually changing the result set). Only warn when we
+      // actually tried to enqueue something (toEnqueue.length > 0) — if the
+      // cap already zeroed out `remaining`, there was nothing to enqueue and
+      // this is not a shortfall at all (see bug #1/#2 fix above).
       recordShortfallReason(
         `Page ${request.url} had ${newListings.length} "new" listingIds but all their detail URLs were already queued — ` +
         `pagination likely isn't advancing the result set.`,
@@ -200,7 +229,8 @@ router.addHandler(LABEL.SEARCH, async ({ request, page, enqueueLinks, crawler }:
     }
 
     if (state.totalEnqueued >= state.maxListings) {
-      log.info('[SEARCH] Enough detail URLs enqueued for maxListings, stopping pagination');
+      log.info(`[SEARCH] Enough detail URLs enqueued for maxListings (${state.maxListings}) — stopping pagination and the crawler`);
+      crawler.stop('maxListings reached — no further search or detail pages needed.');
       return;
     }
   } else {
@@ -227,12 +257,16 @@ router.addHandler(LABEL.SEARCH, async ({ request, page, enqueueLinks, crawler }:
   // In scrapeDetails mode, "enough work queued" is totalEnqueued; otherwise
   // it's totalPushed. Checking the wrong counter here would keep paginating
   // past the point where enough detail pages are already queued (or vice versa).
+  // (The scrapeDetails branch above already returns+stops when satisfied —
+  // this check is reached for the card-only branch, or when scrapeDetails
+  // hasn't yet hit the cap on this page.)
   const satisfied = input.scrapeDetails
     ? state.totalEnqueued >= state.maxListings
     : state.totalPushed >= state.maxListings;
 
   if (satisfied) {
-    log.info(`[SEARCH] Reached maxListings (${state.maxListings}), stopping pagination`);
+    log.info(`[SEARCH] Reached maxListings (${state.maxListings}), stopping pagination and the crawler`);
+    crawler.stop('maxListings reached — no further search pages needed.');
     return;
   }
 
