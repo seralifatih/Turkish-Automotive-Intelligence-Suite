@@ -229,8 +229,14 @@ router.addHandler(LABEL.SEARCH, async ({ request, page, enqueueLinks, crawler }:
     }
 
     if (state.totalEnqueued >= state.maxListings) {
-      log.info(`[SEARCH] Enough detail URLs enqueued for maxListings (${state.maxListings}) — stopping pagination and the crawler`);
-      crawler.stop('maxListings reached — no further search or detail pages needed.');
+      // Stop PAGINATION only — do NOT call crawler.stop() here. The detail
+      // requests enqueued just above (this page's `toEnqueue`) haven't run
+      // yet; crawler.stop() blocks the queue from pulling ANY new task,
+      // including those. Calling it here would strand them unprocessed and
+      // we'd finish short even though the requests needed to hit maxListings
+      // were already queued. The DETAIL handler stops the crawler once
+      // totalPushed (not totalEnqueued) actually reaches maxListings.
+      log.info(`[SEARCH] Enough detail URLs enqueued for maxListings (${state.maxListings}) — stopping pagination only`);
       return;
     }
   } else {
@@ -254,18 +260,14 @@ router.addHandler(LABEL.SEARCH, async ({ request, page, enqueueLinks, crawler }:
 
   // ── Pagination ────────────────────────────────────────────────────────────
 
-  // In scrapeDetails mode, "enough work queued" is totalEnqueued; otherwise
-  // it's totalPushed. Checking the wrong counter here would keep paginating
-  // past the point where enough detail pages are already queued (or vice versa).
-  // (The scrapeDetails branch above already returns+stops when satisfied —
-  // this check is reached for the card-only branch, or when scrapeDetails
-  // hasn't yet hit the cap on this page.)
-  const satisfied = input.scrapeDetails
-    ? state.totalEnqueued >= state.maxListings
-    : state.totalPushed >= state.maxListings;
-
-  if (satisfied) {
-    log.info(`[SEARCH] Reached maxListings (${state.maxListings}), stopping pagination and the crawler`);
+  // Only reached when input.scrapeDetails is false (the scrapeDetails branch
+  // above already returns earlier once its own cap is hit, without calling
+  // crawler.stop() — see that branch's comment for why). In the card-only
+  // branch, pushes are synchronous and complete by this point, so totalPushed
+  // is already accurate and it's safe to stop the crawler outright: there's
+  // no "just enqueued but not yet run" detail work that stop() could strand.
+  if (!input.scrapeDetails && state.totalPushed >= state.maxListings) {
+    log.info(`[SEARCH] Reached maxListings (${state.maxListings}) via card-only pushes, stopping pagination and the crawler`);
     crawler.stop('maxListings reached — no further search pages needed.');
     return;
   }
@@ -296,7 +298,7 @@ router.addHandler(LABEL.SEARCH, async ({ request, page, enqueueLinks, crawler }:
 
 // ── DETAIL handler ────────────────────────────────────────────────────────────
 
-router.addHandler(LABEL.DETAIL, async ({ request, page }: PlaywrightCrawlingContext) => {
+router.addHandler(LABEL.DETAIL, async ({ request, page, crawler }: PlaywrightCrawlingContext) => {
   if (state.totalPushed >= state.maxListings) return;
 
   const input = request.userData.input as Input;
@@ -415,6 +417,15 @@ router.addHandler(LABEL.DETAIL, async ({ request, page }: PlaywrightCrawlingCont
   if (pushed) {
     state.totalPushed++;
     log.info(`[DETAIL] Pushed listing ${listingId} (${state.totalPushed}/${state.maxListings})`);
+
+    // Stop the crawler here, not in SEARCH — totalPushed is the one counter
+    // that's actually true once this specific push lands. Stopping on
+    // totalEnqueued (in SEARCH) was wrong: it fired before the just-enqueued
+    // detail requests had a chance to run, blocking them and finishing short.
+    if (state.totalPushed >= state.maxListings) {
+      log.info(`[DETAIL] Reached maxListings (${state.maxListings}) — stopping the crawler`);
+      crawler.stop('maxListings reached.');
+    }
   }
 });
 
